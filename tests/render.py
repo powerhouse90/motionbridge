@@ -52,6 +52,25 @@ class Views:
         return img
 
 
+def segments_panel(segments, colors, left, forward, up, ground, label, on_top=()):
+    """Front view of fixed segments [(a, b), ...] as seen by someone facing the character.
+
+    left/forward/up are the character's directions; its left appears on the image's right.
+    Segments whose index is in on_top are drawn last.
+    """
+    basis = np.array([left, forward, up], float)
+    segments = [(basis @ a, basis @ b) for a, b in segments]
+    points = np.array([p for s in segments for p in s])[None]
+    views = Views(points, 2, 1, ground)
+    img = np.full((PANEL[1], PANEL[0], 3), 24, np.uint8)
+    order = [i for i in range(len(segments)) if i not in on_top] + list(on_top)
+    for i in order:
+        a, b = segments[i]
+        cv2.line(img, views.project(a, 0, False), views.project(b, 0, False), colors[i], 2, cv2.LINE_AA)
+    cv2.putText(img, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, .4, (220, 220, 220), 1, cv2.LINE_AA)
+    return img
+
+
 def clip_frames(positions, parents, names, up, forward, ground, label):
     """One image per frame: front view beside side view."""
     views, colors = Views(positions, up, forward, ground), side_colors(names)

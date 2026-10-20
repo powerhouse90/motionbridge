@@ -35,7 +35,20 @@ onto any humanoid rig without per-character calibration.
 1. Copy `config.example.toml` to `config.toml` and fill in your paths.
 2. Use a Python 3.11+ environment with NumPy, SciPy and OpenCV (the GEM
    environment works).
-3. Run `python -m tests.golden all` from the repository root.
+3. Run `python -m tests.golden all` from the repository root: motion metrics and
+   contact sheet, rig inspection, then bone mapping (`runs/golden/maps.png`).
+4. Run `python -m tests.test_names` after touching name rules.
+
+## Bone mapping
+
+`core/rigmap.py` finds SOMA's body parts on any humanoid rig from hierarchy and
+rest geometry: the floor, leg ends, head top and arm extremes locate the hips and
+chest; paths between them give spine, neck, arms and legs; the hand is the last
+branch point before the fingertips; the head is the first bone wider than the
+narrowest neck bone. Names only confirm or contradict, which sets each role's
+confidence (1.0 agree, 0.8 silent, 0.5 contradict). The golden runner re-maps
+every rig with its bones renamed `b0, b1, ...`; a role that changes without being
+flagged below 0.8 confidence is a silent error and fails the run.
 
 ## License
 

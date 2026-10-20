@@ -10,6 +10,9 @@ import json
 import subprocess
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from motionbridge import config as configuration
 from motionbridge.core import metrics, soma
 from tests import render
@@ -87,9 +90,78 @@ def rigs_report(config):
               f"{len(data['meshes'])} skinned meshes")
 
 
+ROLE_COLORS = {'Left': render.LEFT, 'Right': render.RIGHT}
+TRUNK, AUX, EXTRA, UNUSED = (235, 235, 235), (60, 200, 230), (110, 110, 110), (55, 55, 55)
+
+
+def anonymize(dump):
+    """Same rig with meaningless bone names, to prove the mapper does not depend on naming."""
+    rename = {b['name']: f'b{i}' for i, b in enumerate(dump['bones'])}
+    bones = [dict(b, name=rename[b['name']], parent=rename.get(b['parent']),
+                  children=[rename[c] for c in b['children']]) for b in dump['bones']]
+    return dict(dump, bones=bones), rename
+
+
+def maps_report(config):
+    from motionbridge.core import rigmap
+    out = Path(config['paths']['runs']) / 'golden'
+    (out / 'maps').mkdir(parents=True, exist_ok=True)
+    panels, summary = [], {}
+    for rig in config['rigs']:
+        source = out / 'rigs' / f"{rig['name']}.json"
+        if not source.is_file():
+            print(f"{rig['name']}: no rig dump; run `python -m tests.golden rigs`")
+            continue
+        dump = json.loads(source.read_text())
+        m = rigmap.build(dump)
+        (out / 'maps' / f"{rig['name']}.json").write_text(json.dumps(m.to_json(), indent=1))
+
+        blind_dump, rename = anonymize(dump)
+        blind = rigmap.build(blind_dump)
+        flat = lambda v: tuple(v) if isinstance(v, list) else v
+        named_roles = {r: flat(v) for r, v in m.roles.items()}
+        blind_roles = {r: flat([rename[x] for x in v] if isinstance(v, list) else rename[v])
+                       for r, v in m.roles.items()}
+        blind_got = {r: flat(v) for r, v in blind.roles.items()}
+        agree = [r for r in named_roles if blind_got.get(r) == blind_roles[r]]
+        # A wrong answer is acceptable only if the mapper said it was unsure.
+        silent = [r for r in named_roles if r not in agree and blind.confidence.get(r, 0) >= 0.8]
+        fingers = sum(1 for r in m.roles if 'Hand' in r and r[-4:] != 'Hand')
+        low = {r: c for r, c in m.confidence.items() if c < 0.8}
+        summary[rig['name']] = {'roles': len(m.roles), 'missing': m.missing(), 'finger_chains': fingers,
+                                'name_blind_agreement': f'{len(agree)}/{len(named_roles)}',
+                                'name_blind_differs': sorted(set(named_roles) - set(agree)),
+                                'name_blind_silent_errors': silent,
+                                'low_confidence': low, 'notes': m.notes}
+        print(f"{rig['name']}: {len(m.roles)} roles, {fingers} finger chains, missing {m.missing() or 'none'}, "
+              f"name-blind agreement {len(agree)}/{len(named_roles)} "
+              f"({'OK' if not silent else 'SILENT ERRORS ' + ', '.join(silent)}), low confidence {low or 'none'}")
+        for note in m.notes:
+            print('   note:', note)
+
+        role_of = {}
+        for role, bones in m.roles.items():
+            for b in (bones if isinstance(bones, list) else [bones]):
+                side = next((s for s in ROLE_COLORS if role.startswith(s)), None)
+                role_of[b] = ROLE_COLORS[side] if side else TRUNK
+        for b in m.hips_aux:
+            role_of[b] = AUX
+        for b in m.extras:
+            role_of.setdefault(b, EXTRA)
+        segs = [(np.array(b['head']), np.array(b['tail'])) for b in dump['bones']]
+        colors = [role_of.get(b['name'], UNUSED) for b in dump['bones']]
+        mapped = [i for i, b in enumerate(dump['bones']) if colors[i] not in (EXTRA, UNUSED)]
+        panels.append(render.segments_panel(segs, colors, m.left or [1, 0, 0], m.forward or [0, -1, 0],
+                                            [0, 0, 1], m.ground, rig['name'], on_top=mapped))
+    (out / 'maps.json').write_text(json.dumps(summary, indent=1))
+    if panels:
+        cv2.imwrite(str(out / 'maps.png'), np.hstack(panels))
+        print(f'wrote {out / "maps.png"}')
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('command', choices=['import', 'motions', 'rigs', 'all'])
+    p.add_argument('command', choices=['import', 'motions', 'rigs', 'map', 'all'])
     p.add_argument('--config')
     a = p.parse_args()
     config = configuration.load(a.config)
@@ -99,6 +171,8 @@ def main():
         motions_report(config)
     if a.command in ('rigs', 'all'):
         rigs_report(config)
+    if a.command in ('map', 'all'):
+        maps_report(config)
 
 
 if __name__ == '__main__':

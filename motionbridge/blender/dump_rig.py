@@ -61,12 +61,34 @@ def main():
     load(path)
     rig = pick_armature(a.armature)
     to_world = rig.matrix_world
+    # Vertices each bone actually moves: separates real bones from end markers and unused helpers.
+    # Girth: median distance from a bone to the vertices it dominates (thin neck vs wide skull).
+    weighted, distances = {}, {}
+    segment = {b.name: (to_world @ b.head_local, to_world @ b.tail_local) for b in rig.data.bones}
+    for o in bpy.data.objects:
+        if o.type == 'MESH' and skins(o, rig):
+            names = {g.index: g.name for g in o.vertex_groups}
+            for v in o.data.vertices:
+                best = None
+                for g in v.groups:
+                    if g.weight > 0.01 and g.group in names:
+                        weighted[names[g.group]] = weighted.get(names[g.group], 0) + 1
+                        if best is None or g.weight > best[1]:
+                            best = (names[g.group], g.weight)
+                if best and best[0] in segment:
+                    start, end = segment[best[0]]
+                    p = o.matrix_world @ v.co
+                    axis = end - start
+                    t = max(0.0, min(1.0, (p - start).dot(axis) / max(axis.length_squared, 1e-12)))
+                    distances.setdefault(best[0], []).append((p - (start + axis * t)).length)
+    girth = {n: sorted(d)[len(d) // 2] for n, d in distances.items()}
     bones = []
     for b in rig.data.bones:
         rest = to_world @ b.matrix_local
         bones.append({'name': b.name, 'parent': b.parent.name if b.parent else None,
                       'head': vec(to_world @ b.head_local), 'tail': vec(to_world @ b.tail_local),
-                      'rest': [vec(row) for row in rest], 'deform': b.use_deform,
+                      'rest': [vec(row) for row in rest], 'deform': b.use_deform, 'weighted_vertices': weighted.get(b.name, 0),
+                      'girth': round(girth.get(b.name, 0.0), 5),
                       'children': [c.name for c in b.children]})
     meshes = []
     for o in bpy.data.objects:
