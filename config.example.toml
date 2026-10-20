@@ -1,0 +1,20 @@
+# Copy to config.toml and edit. config.toml is not committed.
+
+[paths]
+blender = "C:/Program Files/Blender Foundation/Blender 5.0/blender.exe"
+runs = "runs"   # generated output, relative to the repository root
+
+# Golden-set rigs. Characters you can't redistribute stay local: list them here,
+# not in git. `file` may be .blend, .fbx, .glb or .gltf.
+# `armature` is only needed when a file holds more than one armature.
+[[rigs]]
+name = "example_human"
+file = "D:/characters/example.glb"
+# armature = "Armature"
+
+# Golden-set source motions: GEM motion_export.npz files and their frame rate.
+# `python -m tests.golden import` copies them (transforms only) into golden/motions.
+[[motions]]
+name = "example_walk"
+gem_export = "D:/runs/walk/extraction/motion_export.npz"
+fps = 24
