@@ -131,20 +131,72 @@ def retarget_report(config):
                                             left, fwd, SOMA_UP_VEC, ground, f'{f.stem} SOMA')]
         report[f.stem] = {}
         for name, dump, m in rigs:
+            before = retarget.retarget(motion, dump, m, feet_ik=False)
             result = retarget.retarget(motion, dump, m)
             result.save(out / f'{name}__{f.stem}.npz')
-            report[f.stem][name] = measure_rig(result, m, dump)
+            before.save(out / f'{name}__{f.stem}_noik.npz')
+            report[f.stem][name] = {'before_ik': measure_rig(before, m, dump, result.locks),
+                                    'after_ik': measure_rig(result, m, dump, result.locks)}
             columns.append(render.animated_segments(result.heads, result.tails, rig_colors(dump, m), m.left,
                                                     m.forward, m.up, m.ground, name))
         render.write_grid(out / f'{f.stem}.png', columns)
         render.write_video(out / f'{f.stem}.mp4', [[np.hstack(x) for x in zip(*columns)]], motion.fps)
-        print(f.stem, '  '.join(f"{n}: slide {r['foot_slide_m_s']:.3f} m/s, floor {r['floor_error_m']:+.3f} m"
-                                for n, r in report[f.stem].items()))
+        print(f.stem)
+        for n, r in report[f.stem].items():
+            b, a = r['before_ik'], r['after_ik']
+            print(f"   {n:17s} planted slide {b['planted_slide_m_s']:.3f} -> {a['planted_slide_m_s']:.3f} m/s "
+                  f"(p95 {b['planted_slide_p95_m_s']:.3f} -> {a['planted_slide_p95_m_s']:.3f}), worst floor "
+                  f"{b['planted_floor_worst_m']:+.3f} -> {a['planted_floor_worst_m']:+.3f} m  {'; '.join(a['notes'])}")
     (out / 'report.json').write_text(json.dumps(report, indent=1))
     print(f'wrote sheets and videos to {out}')
 
 
 SOMA_UP_VEC = [0., 1., 0.]
+MESH_MOTIONS = ['h3_walk', 'h3_jump', 'h3_crouch']
+
+
+def label(img, text):
+    cv2.rectangle(img, (0, 0), (img.shape[1], 22), (20, 20, 20), -1)
+    cv2.putText(img, text, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, .45, (235, 235, 235), 1, cv2.LINE_AA)
+    return img
+
+
+def meshvideo_report(config, motions=None):
+    """Textured characters, before vs after foot IK, next to the H3 source video. What to judge results on."""
+    runs = Path(config['paths']['runs'])
+    out = runs / 'golden' / 'meshvideo'
+    script = ROOT / 'tests' / 'render_mesh_video.py'
+    motions = motions or MESH_MOTIONS
+    actions = [x for m in motions for x in (m, m + '_noik')]
+    for rig in config['rigs']:
+        blend = runs / 'golden' / 'bake' / f"{rig['name']}.blend"
+        done = subprocess.run([config['paths']['blender'], '-b', '--python-exit-code', '1', '--python', str(script),
+                               '--', '--blend', str(blend), '--actions', *actions, '--outdir',
+                               str(out / rig['name'])], capture_output=True, text=True)
+        if done.returncode:
+            print(f"FAILED {rig['name']}:\n{(done.stdout + done.stderr)[-1500:]}")
+            return
+        print(f"rendered {rig['name']}")
+    for motion in motions:
+        source = runs / 'h3' / motion.removeprefix('h3_') / 'front' / 'source.mp4'
+        capture, src = cv2.VideoCapture(str(source)), []
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            src.append(cv2.resize(frame, (360, 480)))
+        rows = []
+        for suffix, title in (('_noik', 'no IK'), ('', 'foot IK')):
+            frames = []
+            for t in range(len(src)):
+                tiles = [label(src[t].copy(), 'H3 source')]
+                for rig in config['rigs']:
+                    png = out / rig['name'] / (motion + suffix) / f'{t + 1:04d}.png'
+                    tiles.append(label(cv2.imread(str(png)), f"{rig['name']} - {title}"))
+                frames.append(np.hstack(tiles))
+            rows.append(frames)
+        render.write_video(out / f'{motion}.mp4', rows, 24)
+        print(f'wrote {out / (motion + ".mp4")}')
 
 
 def bake_report(config):
@@ -174,16 +226,26 @@ def bake_report(config):
               f"{worst * 1000:.4f} mm, rest unchanged: {report['rest_matrices_unchanged']}")
 
 
-def measure_rig(result, m, dump):
-    """Foot slide while planted, and how far the feet sit above/below where they stand at rest (meters)."""
+def measure_rig(result, m, dump, locks):
+    """Planted-foot slide (m/s) on the frames SOMA marks as planted: ankle on heel frames, toe on toe
+    frames. Also the worst floor error on those frames (m, + floating, - sinking) and jitter."""
     index = {n: i for i, n in enumerate(result.names)}
-    feet = [index[m.roles[k]] for k in ('LeftToeBase', 'RightToeBase', 'LeftFoot', 'RightFoot') if k in m.roles]
     heads = result.heads
-    ground = metrics.ground_height(heads, feet, 2)
-    rest_low = min(dump['bones'][i]['head'][2] for i in feet)
-    slides = [metrics.foot_slide(heads, i, 2, result.fps, ground)[0] for i in feet[:2]]
-    return {'scale': round(result.scale, 3), 'foot_slide_m_s': round(max(slides), 4),
-            'floor_error_m': round(ground - rest_low, 4), 'jitter_m_s2': round(metrics.jitter(heads, result.fps), 3)}
+    speeds, floor = [], []
+    for side in ('Left', 'Right'):
+        joints = {'heel': index[m.roles[side + 'Foot']], 'toe': index.get(m.roles.get(side + 'ToeBase'))}
+        for t in range(1, len(heads)):
+            lock = locks[side][t]
+            if lock is None or lock != locks[side][t - 1] or joints.get(lock) is None:
+                continue
+            i = joints[lock]
+            speeds.append(np.linalg.norm(heads[t, i, :2] - heads[t - 1, i, :2]) * result.fps)
+            floor.append(heads[t, i, 2] - dump['bones'][i]['head'][2])
+    worst_floor = max(floor, key=abs) if floor else 0.0
+    return {'scale': round(result.scale, 3), 'planted_slide_m_s': round(float(np.mean(speeds)) if speeds else 0, 4),
+            'planted_slide_p95_m_s': round(float(np.percentile(speeds, 95)) if speeds else 0, 4),
+            'planted_floor_worst_m': round(float(worst_floor), 4),
+            'jitter_m_s2': round(metrics.jitter(heads, result.fps), 3), 'notes': result.notes or []}
 
 
 def anonymize(dump):
@@ -244,7 +306,7 @@ def maps_report(config):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('command', choices=['import', 'motions', 'rigs', 'map', 'retarget', 'bake', 'all'])
+    p.add_argument('command', choices=['import', 'motions', 'rigs', 'map', 'retarget', 'bake', 'meshvideo', 'all'])
     p.add_argument('--config')
     a = p.parse_args()
     config = configuration.load(a.config)
@@ -260,6 +322,8 @@ def main():
         retarget_report(config)
     if a.command in ('bake', 'all'):
         bake_report(config)
+    if a.command in ('meshvideo', 'all'):
+        meshvideo_report(config)
 
 
 if __name__ == '__main__':

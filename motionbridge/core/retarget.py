@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from motionbridge.core import contacts
+
 SOMA_UP = np.array([0., 1., 0.])
 SPINE, NECK = ['Spine1', 'Spine2', 'Chest'], ['Neck1', 'Neck2']
 LIMB = [('Shoulder', 'Shoulder', 'Arm'), ('Arm', 'Arm', 'ForeArm'), ('ForeArm', 'ForeArm', 'Hand'),
@@ -40,6 +42,8 @@ class Result:
     scale: float             # rig leg length / SOMA leg length
     fps: float
     pairs: dict              # bone -> SOMA joint it follows
+    locks: dict = None       # per side, per frame: 'heel', 'toe' or None (from contacts.detect)
+    notes: list = None
 
     def save(self, path):
         np.savez_compressed(path, names=np.array(self.names), quaternions=self.quaternions.astype(np.float32),
@@ -130,8 +134,9 @@ def soma_facing(motion, face_start=True):
     return world, left, fwd
 
 
-def retarget(motion, dump, rigmap, face_start=True):
-    """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump."""
+def retarget(motion, dump, rigmap, face_start=True, feet_ik=True):
+    """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump.
+    feet_ik pins planted feet (contacts detected on SOMA) with leg IK."""
     bones = dump['bones']
     names = [b['name'] for b in bones]
     index = {n: i for i, n in enumerate(names)}
@@ -179,7 +184,7 @@ def retarget(motion, dump, rigmap, face_start=True):
     soma_leg = (soma_rest[j('LeftLeg')] - soma_rest[j('LeftFoot')]).dot(up)
     scale = (rig_leg('Left') + rig_leg('Right')) / 2 / soma_leg
     feet = [j(f'{s}{x}') for s in ('Left', 'Right') for x in ('Foot', 'ToeBase')]
-    soma_ground = np.percentile((soma_pos[:, feet] @ up).min(axis=1), 5)
+    soma_ground = contacts.ground_track(motion)  # per frame: reconstructed floors drift
     # Hips height relative to standing: SOMA's hips joint sits higher above the thighs than most rigs'
     # hips bones, so only the change from standing is scaled; the rig keeps its own standing height.
     soma_stand = soma_rest[j('Hips')].dot(up) - min(soma_rest[feet] @ up)
@@ -191,16 +196,23 @@ def retarget(motion, dump, rigmap, face_start=True):
     rise = (soma_hips @ up - soma_ground) - soma_stand
     root = hips_rest + scale * flat + np.outer(scale * rise, up)
 
-    # Forward kinematics in armature space.
-    pose = np.repeat(rest[None], T, axis=0)
-    for i in order:
-        p = parent[i]
-        if p is not None:
-            pose[:, i] = pose[:, p] @ (np.linalg.inv(rest[p]) @ rest[i])
-        if i in target_rot:
-            pose[:, i, :3, :3] = target_rot[i]
-        if i == hips_b:
-            pose[:, i, :3, 3] = root
+    def fk(rotations_, root_):
+        """Forward kinematics in armature space."""
+        pose_ = np.repeat(rest[None], T, axis=0)
+        for i in order:
+            p = parent[i]
+            if p is not None:
+                pose_[:, i] = pose_[:, p] @ (np.linalg.inv(rest[p]) @ rest[i])
+            if i in rotations_:
+                pose_[:, i, :3, :3] = rotations_[i]
+            if i == hips_b:
+                pose_[:, i, :3, 3] = root_
+        return pose_
+
+    locks = contacts.detect(motion) if feet_ik else None
+    if feet_ik:
+        root, notes = _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd)
+    pose = fk(target_rot, root)
 
     # Local pose (Blender basis): rest_local^-1 @ parent_pose^-1 @ pose.
     basis = np.empty_like(pose)
@@ -222,4 +234,139 @@ def retarget(motion, dump, rigmap, face_start=True):
     tails_arm = heads_arm + pose[..., :3, 1] * lengths[None, :, None]
     to_world = lambda x: x @ obj[:3, :3].T + obj[:3, 3]
     return Result(names, quats, basis[..., :3, 3], to_world(heads_arm), to_world(tails_arm), float(scale),
-                  motion.fps, {bone: sj for bone, sj, *_ in pairs})
+                  motion.fps, {bone: sj for bone, sj, *_ in pairs}, locks, notes if feet_ik else [])
+
+
+BLEND = 5        # frames to ease into and out of a plant
+REACH = 0.995    # never straighten a leg fully: a locked knee pops
+
+
+def _swing_batch(a, b):
+    """Per-row smallest rotation taking a[t] onto b[t]; (T, 3) -> (T, 3, 3)."""
+    return np.array([_swing(x, y) for x, y in zip(a, b)])
+
+
+def _runs(labels, value):
+    t, out = 0, []
+    while t < len(labels):
+        if labels[t] == value:
+            end = t
+            while end < len(labels) and labels[end] == value:
+                end += 1
+            out.append((t, end))
+            t = end
+        else:
+            t += 1
+    return out
+
+
+def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd):
+    """Pin planted feet to the floor: per-span targets, hips lowered only when a leg can't reach,
+    then analytic two-bone IK on thigh and shin. Foot rotations stay as transferred.
+    Modifies target_rot in place; returns the adjusted root and notes."""
+    notes = []
+    pose = fk(target_rot, root)
+    T = len(root)
+    flat = lambda v: v - np.outer(v @ up, up)
+    goals, legs, legs_weight = {}, {}, {}
+    for side in ('Left', 'Right'):
+        if not all(side + r in roles for r in ('Leg', 'Shin', 'Foot')):
+            continue
+        l, s, f = (index[roles[side + r]] for r in ('Leg', 'Shin', 'Foot'))
+        if parent[s] != l or parent[f] != s:
+            notes.append(f'{side} leg has extra bones between thigh, shin and foot; feet left unplanted')
+            continue
+        toe = index[roles[side + 'ToeBase']] if side + 'ToeBase' in roles else None
+        ankle, toe_p = pose[:, f, :3, 3], (pose[:, toe, :3, 3] if toe is not None else None)
+        ankle_h = rest[f, :3, 3] @ up
+        labels = locks[side] if toe is not None else ['heel' if x else None for x in locks[side]]
+        target = np.full((T, 3), np.nan)
+        # Planted joints are pinned horizontally. Their height follows the source's own rise above its
+        # lowest point in that plant, so heel peels and toe rolls come through instead of being held
+        # flat and then released in a pop.
+        def lift(points, a, b):
+            z = points[a:b] @ up
+            return np.outer(z - z.min(), up)
+
+        for a, b in _runs(labels, 'heel'):
+            target[a:b] = flat(ankle[a:b]).mean(axis=0) + up * ankle_h + lift(ankle, a, b)
+        for a, b in _runs(labels, 'toe'):
+            if a > 0 and labels[a - 1] == 'heel':  # heel lifting: keep the toe where the flat foot left it
+                spot = target[a - 1] + (toe_p[a - 1] - ankle[a - 1])
+            else:
+                spot = flat(toe_p[a:b]).mean(axis=0) + up * (rest[toe, :3, 3] @ up)
+            spot = flat(spot) + up * (rest[toe, :3, 3] @ up)
+            # ankle goal that puts the toe on its spot (plus the source's own toe lift)
+            target[a:b] = spot + lift(toe_p, a, b) + (ankle[a:b] - toe_p[a:b])
+        # Switching between heel and toe pins: the source heel starts moving before its label flips, so
+        # the two pins disagree. Ease the jump out over BLEND + 1 frames so the foot rolls, never pops.
+        for a in range(1, T):
+            if labels[a] and labels[a - 1] and labels[a] != labels[a - 1]:
+                gap = target[a - 1] + (ankle[a] - ankle[a - 1]) - target[a]
+                for k in range(BLEND + 1):
+                    if a + k < T and labels[a + k] == labels[a]:
+                        target[a + k] += gap * (1 - (k + 1) / (BLEND + 2))
+        weight = np.zeros(T)
+        planted = ~np.isnan(target[:, 0])
+        for t in range(T):  # ease in/out around each plant, aiming at the nearest planted spot
+            if planted[t]:
+                weight[t] = 1
+                continue
+            near = [u for u in range(max(0, t - BLEND), min(T, t + BLEND + 1)) if planted[u]]
+            if near:
+                u = min(near, key=lambda u: abs(u - t))
+                weight[t] = 1 - abs(u - t) / (BLEND + 1)
+                target[t] = ankle[t] + (target[u] - ankle[u])  # carry the nearest plant's correction
+        goal = ankle.copy()
+        mask = weight > 0
+        goal[mask] = ankle[mask] + weight[mask, None] * (target[mask] - ankle[mask])
+        thigh_len = np.linalg.norm(rest[s, :3, 3] - rest[l, :3, 3])
+        shin_len = np.linalg.norm(rest[f, :3, 3] - rest[s, :3, 3])
+        goals[side], legs[side] = (goal, mask), (l, s, f, thigh_len, shin_len)
+        legs_weight[side] = weight
+
+    # Lower the hips just enough for every planted leg to reach its spot.
+    drop = np.zeros(T)
+    for side, (goal, mask) in goals.items():
+        l, s, f, a, b = legs[side]
+        v = goal - pose[:, l, :3, 3]
+        z = v @ up
+        h = np.linalg.norm(flat(v), axis=1)
+        reach = REACH * (a + b)
+        need = np.where(h < reach, -np.sqrt(np.maximum(reach ** 2 - h ** 2, 0)) - z, 0)
+        drop = np.maximum(drop, np.where(mask, need, 0))
+    if drop.max() > 0:
+        k = 2 * BLEND + 1
+        drop = np.array([drop[max(0, t - BLEND):t + BLEND + 1].max() for t in range(T)])  # cover neighbours
+        drop = np.convolve(np.pad(drop, BLEND, mode='edge'), np.ones(k) / k, mode='valid')
+        # Only where a foot is (easing into being) planted: smoothing must not pull a jump's airtime down.
+        planted = np.max([legs_weight[side] for side in legs_weight], axis=0)
+        drop *= planted
+        root = root - np.outer(drop, up)
+        pose = fk(target_rot, root)
+        notes.append(f'hips lowered up to {drop.max() * 100:.1f} cm so planted feet reach the floor')
+
+    # Two-bone IK, knee kept in the plane it already bends in.
+    for side, (goal, mask) in goals.items():
+        l, s, f, a, b = legs[side]
+        frames = np.flatnonzero(mask)
+        if not len(frames):
+            continue
+        H, K, A = (pose[frames, i, :3, 3] for i in (l, s, f))
+        G = goal[frames]
+        v = G - H
+        dist = np.clip(np.linalg.norm(v, axis=1), abs(a - b) + 1e-4, REACH * (a + b))
+        n = v / np.linalg.norm(v, axis=1, keepdims=True)
+        bend = (K - H) - np.einsum('ti,ti->t', K - H, n)[:, None] * n
+        weak = np.linalg.norm(bend, axis=1) < 1e-4 * (a + b)
+        bend[weak] = fwd - np.outer(n[weak] @ fwd, np.ones(3)) * n[weak]  # straight leg: knees forward
+        bend /= np.linalg.norm(bend, axis=1, keepdims=True)
+        along = (a * a - b * b + dist * dist) / (2 * dist)
+        knee = H + n * along[:, None] + bend * np.sqrt(np.maximum(a * a - along * along, 0))[:, None]
+        ankle_new = H + n * dist[:, None]
+        thigh = target_rot[l].copy()
+        shin = target_rot[s].copy()
+        thigh[frames] = np.einsum('tab,tbc->tac', _swing_batch(K - H, knee - H), thigh[frames])
+        shin[frames] = np.einsum('tab,tbc->tac', _swing_batch(A - K, ankle_new - knee), shin[frames])
+        target_rot[l], target_rot[s] = thigh, shin
+    return root, notes
