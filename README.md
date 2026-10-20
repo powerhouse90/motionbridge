@@ -50,6 +50,21 @@ confidence (1.0 agree, 0.8 silent, 0.5 contradict). The golden runner re-maps
 every rig with its bones renamed `b0, b1, ...`; a role that changes without being
 flagged below 0.8 confidence is a silent error and fails the run.
 
+## Retargeting
+
+`core/retarget.py` turns a SOMA motion into local pose keys for any mapped rig.
+Each mapped bone takes SOMA's world-space rotation change from rest, after a
+swing that lines its rest direction up with SOMA's rest segment, so T-pose and
+A-pose rigs both work. Spine, neck and finger chains of any length map by
+position along the chain (fingers from the tip). Forward kinematics keeps the
+rig's own bone lengths; the hips keep the rig's standing height and receive
+SOMA's travel and rise scaled by the hip-to-ankle ratio. By default the clip is
+turned so frame 1 faces the rig's front.
+
+`blender/apply_motion.py` keys the result (one action per motion), reads every
+bone head back from Blender, and saves a new BLEND plus an FBX with all actions.
+`python -m tests.golden retarget` and `bake` run every motion on every rig.
+
 ## License
 
 Apache License 2.0. Models and assets used at runtime (H3, GEM, SAM 3D Body,

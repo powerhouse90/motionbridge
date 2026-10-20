@@ -71,6 +71,31 @@ def segments_panel(segments, colors, left, forward, up, ground, label, on_top=()
     return img
 
 
+def animated_segments(heads, tails, colors, left, forward, up, ground, label):
+    """Front view per frame of moving segments; heads/tails (T, N, 3). Fixed framing for the clip."""
+    basis = np.array([left, forward, up], float)
+    h, t = heads @ basis.T, tails @ basis.T
+    views = Views(np.concatenate([h, t], axis=1), 2, 1, ground)
+    frames = []
+    for f in range(len(h)):
+        img = np.full((PANEL[1], PANEL[0], 3), 24, np.uint8)
+        floor_y = views.project(np.array([0, 0, ground]), 0, False)[1]
+        cv2.line(img, (0, floor_y), (PANEL[0], floor_y), (70, 70, 70), 1)
+        for i in np.argsort([c == CENTER for c in colors], kind='stable')[::-1]:
+            cv2.line(img, views.project(h[f, i], 0, False), views.project(t[f, i], 0, False), colors[i], 2,
+                     cv2.LINE_AA)
+        cv2.putText(img, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, .4, (220, 220, 220), 1, cv2.LINE_AA)
+        frames.append(img)
+    return frames
+
+
+def write_grid(path, columns, picks=4):
+    """Still sheet: one row per picked frame, one column per clip."""
+    length = min(len(c) for c in columns)
+    idx = np.linspace(0, length - 1, picks).round().astype(int)
+    cv2.imwrite(str(path), np.vstack([np.hstack([c[i] for c in columns]) for i in idx]))
+
+
 def clip_frames(positions, parents, names, up, forward, ground, label):
     """One image per frame: front view beside side view."""
     views, colors = Views(positions, up, forward, ground), side_colors(names)
