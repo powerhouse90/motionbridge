@@ -254,7 +254,8 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True):
 
 
 BLEND = 5        # frames to ease into and out of a plant
-REACH = 0.995    # never straighten a leg fully: a locked knee pops
+MAX_ROLL = np.radians(12)  # pelvis roll limit for planting both feet
+REACH = 0.9999   # essentially full length; 0.995 forced ~11 degrees of knee bend on straight legs
 
 
 def _swing_batch(a, b):
@@ -276,9 +277,13 @@ def _runs(labels, value):
     return out
 
 
-def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd):
+def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd, drive_root=True):
     """Pin planted feet to the floor: per-span targets, hips lowered only when a leg can't reach,
     then analytic two-bone IK on thigh and shin. Foot rotations stay as transferred.
+
+    First pass (drive_root): the planted feet drive the body. The root is shifted (in all three axes)
+    so each planted foot lands on its pin with the leg exactly as transferred. Otherwise the legs do
+    the adjusting: near full extension a 2 cm hip drop bends a straight knee by ~20 degrees.
     Modifies target_rot in place; returns the adjusted root and notes."""
     notes = []
     pose = fk(target_rot, root)
@@ -304,13 +309,20 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             z = points[a:b] @ up
             return np.outer(z - z.min(), up)
 
+        def slow(points, a, b):
+            """Planted position: the source position averaged over the plant."""
+            xy = flat(points[a:b])
+            out = np.empty_like(xy)
+            out[:] = xy.mean(axis=0)  # PIN_WINDOW > 0 would follow slow drift; tried: it lets slide back in
+            return out
+
         for a, b in _runs(labels, 'heel'):
-            target[a:b] = flat(ankle[a:b]).mean(axis=0) + up * ankle_h + lift(ankle, a, b)
+            target[a:b] = slow(ankle, a, b) + up * ankle_h + lift(ankle, a, b)
         for a, b in _runs(labels, 'toe'):
             if a > 0 and labels[a - 1] == 'heel':  # heel lifting: keep the toe where the flat foot left it
                 spot = target[a - 1] + (toe_p[a - 1] - ankle[a - 1])
             else:
-                spot = flat(toe_p[a:b]).mean(axis=0) + up * (rest[toe, :3, 3] @ up)
+                spot = slow(toe_p, a, b) + up * (rest[toe, :3, 3] @ up)
             spot = flat(spot) + up * (rest[toe, :3, 3] @ up)
             # ankle goal that puts the toe on its spot (plus the source's own toe lift)
             target[a:b] = spot + lift(toe_p, a, b) + (ankle[a:b] - toe_p[a:b])
@@ -340,6 +352,62 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         shin_len = np.linalg.norm(rest[f, :3, 3] - rest[s, :3, 3])
         goals[side], legs[side] = (goal, mask), (l, s, f, thigh_len, shin_len)
         legs_weight[side] = weight
+
+    if drive_root and goals:
+        pose_ = pose
+        flat_ = lambda v: v - np.outer(v @ up, up)
+        num, den = np.zeros((T, 3)), np.zeros(T)
+        for side, (goal, mask) in goals.items():
+            l, s_, f, *_ = legs[side]
+            w = legs_weight[side]
+            num += w[:, None] * (goal - pose_[:, f, :3, 3])  # all three axes: height too
+            den += w
+        known = den > 1e-6
+        if known.any():
+            shift = np.zeros((T, 3))
+            shift[known] = num[known] / den[known, None]
+            for axis in range(3):  # carry the correction smoothly through airborne frames
+                shift[~known, axis] = np.interp(np.flatnonzero(~known), np.flatnonzero(known), shift[known, axis])
+            k = 2 * BLEND + 1
+            shift = np.stack([np.convolve(np.pad(shift[:, i], BLEND, mode='edge'), np.ones(k) / k, mode='valid')
+                              for i in range(3)], axis=1)
+            root2, more = _plant_feet(fk, target_rot, root + shift, rest, parent, index, roles, locks, up, fwd,
+                                      drive_root=False)
+            return root2, [f'root follows planted feet (up to {np.linalg.norm(shift, axis=1).max() * 100:.1f} cm)'] + more
+
+    def needs():
+        """Per side: how far (along up) the hip joint must come down for the planted foot to reach."""
+        out = {}
+        for side, (goal, mask) in goals.items():
+            l, s, f, a, b = legs[side]
+            v = goal - pose[:, l, :3, 3]
+            z = v @ up
+            h = np.linalg.norm(flat(v), axis=1)
+            reach = REACH * (a + b)
+            out[side] = np.where(mask & (h < reach), -np.sqrt(np.maximum(reach ** 2 - h ** 2, 0)) - z, 0)
+        return out
+
+    # Both feet planted but one can't reach (e.g. auto-rigs with unequal legs, or a source weight
+    # shift): roll the pelvis about the body's forward axis to lower that hip, instead of dropping the
+    # whole body and buckling the other knee. The spine keeps its own world rotation, so the torso
+    # does not tilt with it.
+    hips = index[roles['Hips']]
+    if len(goals) == 2 and hips in target_rot:
+        n = needs()
+        both = np.minimum(legs_weight['Left'], legs_weight['Right'])
+        hip_w = np.linalg.norm(pose[:, legs['Left'][0], :3, 3] - pose[:, legs['Right'][0], :3, 3], axis=1)
+        # +angle about forward RAISES the left hip: forward x left = forward x (up x forward) = +up
+        angle = np.clip((n['Right'] - n['Left']) / np.maximum(hip_w, 1e-6), -MAX_ROLL, MAX_ROLL) * both
+        k = 2 * BLEND + 1
+        angle = np.convolve(np.pad(angle, BLEND, mode='edge'), np.ones(k) / k, mode='valid')
+        if np.abs(angle).max() > 1e-4:
+            body_fwd = target_rot[hips] @ np.linalg.inv(rest[hips, :3, :3]) @ fwd
+            body_fwd = body_fwd - np.outer(body_fwd @ up, up)
+            body_fwd /= np.linalg.norm(body_fwd, axis=1, keepdims=True)
+            roll = Rotation.from_rotvec(body_fwd * angle[:, None]).as_matrix()
+            target_rot[hips] = np.einsum('tab,tbc->tac', roll, target_rot[hips])
+            pose = fk(target_rot, root)
+            notes.append(f'pelvis rolled up to {np.degrees(np.abs(angle).max()):.1f} deg to plant both feet')
 
     # Lower the hips just enough for every planted leg to reach its spot.
     drop = np.zeros(T)

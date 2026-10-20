@@ -13,7 +13,7 @@ from motionbridge import config as configuration
 STAGES = ['detect', 'pose', 'features', 'motion', 'export']
 
 
-def extract(video, out, gem_root, gem_python):
+def extract(video, out, gem_root, gem_python, focal_scale=1.0):
     video, out = Path(video).resolve(), Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(video.read_bytes()).hexdigest()
@@ -29,7 +29,7 @@ def extract(video, out, gem_root, gem_python):
         print('GEM stage', stage, flush=True)
         with (out / f'{stage}.log').open('w') as log:
             result = subprocess.run([gem_python, str(backend), '--gem-root', gem_root, '--video', str(video),
-                                     '--out', str(out), '--stage', stage], stdout=log, stderr=subprocess.STDOUT)
+                                     '--out', str(out), '--stage', stage, '--focal-scale', str(focal_scale)], stdout=log, stderr=subprocess.STDOUT)
         if result.returncode:
             raise RuntimeError(f'GEM stage {stage} failed:\n' + (out / f'{stage}.log').read_text()[-2000:])
         done.write_text('complete\n')

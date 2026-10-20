@@ -9,6 +9,7 @@ from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--gem-root',required=True);p.add_argument('--video',required=True);p.add_argument('--out',required=True);p.add_argument('--stage',choices=['detect','pose','features','motion','export'],required=True)
 p.add_argument('--no-contact-postproc',action='store_true',help='Diagnostic ablation of GEM contact translation/IK cleanup')
 p.add_argument('--seed',type=int,help='Optional fixed seed for paired inference experiments')
+p.add_argument('--focal-scale',type=float,default=1.0,help='Multiply GEM default focal length (max(w,h)). Large values approximate an orthographic camera')
 a=p.parse_args();root=Path(a.gem_root).resolve();out=Path(a.out).resolve();video=Path(a.video).resolve();out.mkdir(parents=True,exist_ok=True)
 # Executing this file directly otherwise exposes the harness's profile.py as
 # stdlib "profile", which breaks cProfile imports inside Torch/Transformers.
@@ -29,6 +30,15 @@ torch.load=model_load
 with initialize_config_dir(version_base='1.3',config_dir=str(root/'configs')):
     cfg=compose(config_name='demo_soma',overrides=['exp=gem_soma_regression','video_name=capture',f'video_path={video.as_posix()}',f'output_root={out.as_posix()}','static_cam=true','verbose=false','render_mhr=false','use_wandb=false','task=test','ckpt_path=inputs/pretrained/gem_soma.ckpt','sam3d_ckpt_path=inputs/checkpoints/sam-3d-body-dinov3/sam3d_body.ckpt','sam3d_mhr_path=inputs/mhr_data/mhr_model.pt'])
 Path(cfg.preprocess_dir).mkdir(parents=True,exist_ok=True)
+if a.focal_scale!=1.0:
+    # GEM assumes focal = max(w,h) (~53 deg FOV). Rendered/orthographic footage needs a longer lens.
+    import gem.utils.cam_utils as cam_utils
+    _estimate_K=cam_utils.estimate_K
+    def scaled_K(width,height):
+        K=_estimate_K(width,height).clone();K[0,0]*=a.focal_scale;K[1,1]*=a.focal_scale;return K
+    cam_utils.estimate_K=scaled_K
+    import scripts.demo.demo_soma as demo_soma
+    demo_soma.estimate_K=scaled_K
 from gem.utils.video_io_utils import read_video_np,get_video_lwh
 L,W,H=get_video_lwh(cfg.video_path)
 with torch.no_grad():
@@ -44,7 +54,8 @@ with torch.no_grad():
         result=VitPoseExtractor(device='cuda:0',pose_type='soma').extract(read_video_np(cfg.video_path),torch.load(cfg.paths.bbx)['bbx_xys'],img_ds=1.,batch_size=2,path_type='np');torch.save(result,cfg.paths.vitpose)
     elif a.stage=='features':
         from gem.utils.sam3db_extractor import SAM3DBExtractor
-        from gem.utils.cam_utils import estimate_K,get_a_pred_cam
+        from gem.utils.cam_utils import get_a_pred_cam
+        import gem.utils.cam_utils as cam_utils;estimate_K=cam_utils.estimate_K
         boxes=torch.load(cfg.paths.bbx)['bbx_xys'];result=SAM3DBExtractor(checkpoint_path=cfg.sam3d_ckpt_path,mhr_path=cfg.sam3d_mhr_path,device='cuda:0').extract_video_features(cfg.video_path,boxes,batch_size=1)
         K=estimate_K(W,H).repeat(L,1,1);torch.save({'pose_tokens':result['pose_tokens'],'pred_cam':get_a_pred_cam(result['transls'],boxes,K)},cfg.paths.vit_features)
     elif a.stage=='motion':
