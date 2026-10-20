@@ -110,8 +110,10 @@ def _pairs(roles, rig_head, soma_head):
                 continue
             following = {'Shoulder': 'Arm', 'Arm': 'ForeArm', 'ForeArm': 'Hand', 'Leg': 'Shin', 'Shin': 'Foot',
                          'Foot': 'ToeBase'}.get(role)
+            # Clavicles move relative to their own rest, like the spine: forcing them onto SOMA's
+            # clavicle (angled ~20 degrees back) swung rigs' shoulders 20-32 degrees off their skinning.
             out.append((roles[side + role], side + j, side + k, roles.get(side + following) if following else None,
-                        True))
+                        role != 'Shoulder'))
         if side + 'Hand' in roles:
             middle = roles.get(side + 'HandMiddle')
             out.append((roles[side + 'Hand'], side + 'Hand', side + 'HandMiddle1', middle[0] if middle else None,
