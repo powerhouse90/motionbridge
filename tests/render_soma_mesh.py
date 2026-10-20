@@ -18,12 +18,16 @@ def prepare(export, out):
     world, left, fwd = retarget.soma_facing(motion)
     # recover the yaw soma_facing applied, from the hips' turned vs original rotation
     yaw = world[0, motion.index('Hips'), :3, :3] @ np.linalg.inv(motion.world[0, motion.index('Hips'), :3, :3])
-    v = d['global_vertices'] @ yaw.T
     to_blender = np.column_stack([left, -fwd, [0, 1, 0]]).T  # rows: Blender X(left), Y(back), Z(up)
-    v = v @ to_blender.T
-    v[..., 2] -= np.percentile(v[..., 2].min(axis=1), 5)
-    v[..., :2] -= v[0, :, :2].mean(axis=0)
-    np.savez_compressed(out, vertices=v.astype(np.float32), faces=d['faces'])
+    v = d['global_vertices'] @ yaw.T @ to_blender.T
+    hips = motion.positions[:, [motion.index('LeftLeg'), motion.index('RightLeg')]] @ yaw.T @ to_blender.T
+    floor = np.percentile(v[..., 2].min(axis=1), 5)
+    shift = v[0, :, :2].mean(axis=0)
+    v[..., 2] -= floor
+    hips[..., 2] -= floor
+    v[..., :2] -= shift
+    hips[..., :2] -= shift
+    np.savez_compressed(out, vertices=v.astype(np.float32), faces=d['faces'], hips=hips.astype(np.float32))
 
 
 def render(frames_file, outdir, view):
@@ -56,7 +60,7 @@ def render(frames_file, outdir, view):
     floor.data.materials.append(fm)
     scene.render.engine = 'BLENDER_EEVEE'
     scene.eevee.taa_render_samples = 8
-    scene.render.resolution_x, scene.render.resolution_y = 360, 480
+    scene.render.resolution_x, scene.render.resolution_y = 600, 700
     world = bpy.data.worlds.new('grey')
     scene.world = world
     world.use_nodes = True
@@ -75,13 +79,23 @@ def render(frames_file, outdir, view):
     yaw_deg, pitch = (30, 15) if view == 'front34' else (90, 0)
     direction = Vector((math.sin(math.radians(yaw_deg)), -math.cos(math.radians(yaw_deg)), math.tan(math.radians(pitch))))
     direction.normalize()
-    fov = 2 * math.atan(36 / 2 / cam.data.lens) * min(1, 360 / 480)
+    fov = 2 * math.atan(36 / 2 / cam.data.lens) * min(1, 600 / 700)
     cam.location = centre + direction * radius / math.sin(fov / 2) * 1.05
     cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
     Path(outdir).mkdir(parents=True, exist_ok=True)
+    distance = radius / math.sin(fov / 2) * 1.05
     for t in range(len(verts)):
         mesh.vertices.foreach_set('co', verts[t].ravel())
         mesh.update()
+        if view == 'profile':  # same tracking camera as render_mesh_video: level, at the body's right side
+            l_hip, r_hip = Vector(data['hips'][t, 0].tolist()), Vector(data['hips'][t, 1].tolist())
+            side = r_hip - l_hip
+            side.z = 0
+            side.normalize()
+            pelvis = (l_hip + r_hip) / 2
+            aim = Vector((pelvis.x, pelvis.y, centre.z))
+            cam.location = aim + side * distance
+            cam.rotation_euler = (-side).to_track_quat('-Z', 'Y').to_euler()
         scene.render.filepath = str(Path(outdir) / f'{t + 1:04d}.png')
         bpy.ops.render.render(write_still=True)
 

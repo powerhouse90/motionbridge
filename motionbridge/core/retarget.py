@@ -25,6 +25,14 @@ from scipy.spatial.transform import Rotation
 from motionbridge.core import contacts
 
 SOMA_UP = np.array([0., 1., 0.])
+# SOMA's visual face frame in the Head joint's own frame: columns = left (ear to ear), forward
+# (ears to eyes, ~Frankfort plane, level gaze), up. Measured on GEM body meshes (ear vertices
+# 658/2862, eye joints) over three clips/body shapes; they agree within 3.4 degrees. Columns are
+# (left, forward, up) like the rig frames it is paired with, so both are mirrored (det -1) and
+# their product is a proper rotation.
+SOMA_FACE_IN_HEAD = np.array([[-0.00144, -0.0077, 0.99997],
+                              [-0.00499, 0.99996, 0.00769],
+                              [0.99999, 0.00498, 0.00147]])
 SPINE, NECK = ['Spine1', 'Spine2', 'Chest'], ['Neck1', 'Neck2']
 LIMB = [('Shoulder', 'Shoulder', 'Arm'), ('Arm', 'Arm', 'ForeArm'), ('ForeArm', 'ForeArm', 'Hand'),
         ('Leg', 'Leg', 'Shin'), ('Shin', 'Shin', 'Foot'), ('Foot', 'Foot', 'ToeBase'),
@@ -151,9 +159,12 @@ def soma_facing(motion, face_start=True):
     return world, left, fwd
 
 
-def retarget(motion, dump, rigmap, face_start=True, feet_ik=True):
+def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
     """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump.
-    feet_ik pins planted feet (contacts detected on SOMA) with leg IK."""
+    feet_ik pins planted feet (contacts detected on SOMA) with leg IK.
+    head='face': the rig's face points where the performer's face points (world space).
+    head='carriage': the head keeps the character's built-in rest carriage and adds the
+    performer's change on top (for characters modelled with a deliberate head pose)."""
     bones = dump['bones']
     names = [b['name'] for b in bones]
     index = {n: i for i, n in enumerate(names)}
@@ -194,6 +205,17 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True):
         seg = soma_rest[j(sk)] - soma_rest[j(sj)]
         a = _swing(bone_dir, seg) if align and np.linalg.norm(bone_dir) > 1e-6 else np.eye(3)
         target_rot[b] = np.einsum('tab,bc->tac', rotations[:, j(sj)], a @ rest[b, :3, :3])
+    if head == 'face':
+        # SOMA's rest pose looks ~9 degrees up, so copying its change from rest bowed every rig's
+        # head. Map SOMA's measured face frame onto the rig's rest face frame (assumed to look
+        # straight ahead along the rig's front) instead.
+        hb = index[rigmap.roles['Head']]
+        soma_face = convert @ motion.rest[j('Head'), :3, :3] @ SOMA_FACE_IN_HEAD
+        rig_face = np.column_stack([left, fwd, up])
+        target_rot[hb] = np.einsum('tab,bc->tac', rotations[:, j('Head')],
+                                   soma_face @ rig_face.T @ rest[hb, :3, :3])
+    elif head != 'carriage':
+        raise ValueError(f"head must be 'face' or 'carriage', not {head!r}")
 
     # Root: hip-to-ankle ratio scales travel and height above the floor.
     roles = rigmap.roles
