@@ -73,7 +73,10 @@ def main():
     result = {'file': path.as_posix(), 'armature': rig.name, 'object_matrix': [vec(r) for r in to_world],
               'unit_scale': bpy.context.scene.unit_settings.scale_length,
               'other_armatures': [o.name for o in bpy.data.objects if o.type == 'ARMATURE' and o != rig],
-              'bones': bones, 'meshes': meshes}
+              'bones': bones, 'meshes': meshes,
+              # textures neither packed nor found on disk: the character would render untextured
+              'missing_images': [i.name for i in bpy.data.images if i.source == 'FILE' and not i.packed_file
+                                 and not Path(bpy.path.abspath(i.filepath)).is_file()]}
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(result, indent=1))
     print(f'dump_rig: {rig.name}, {len(bones)} bones, {len(meshes)} skinned meshes -> {a.out}')

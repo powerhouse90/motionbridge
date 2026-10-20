@@ -7,7 +7,37 @@ NVIDIA GEM, or text through NVIDIA Kimodo) writes one canonical skeleton, SOMA's
 77 joints. Cleanup runs once on that skeleton. A generic retargeter then maps it
 onto any humanoid rig without per-character calibration.
 
-**Status:** early scaffold. Nothing here runs in ComfyUI yet.
+## Install
+
+1. Clone into `ComfyUI/custom_nodes/` and restart ComfyUI. The nodes use only what ComfyUI
+   already ships (NumPy, SciPy, PyTorch, PyAV, Pillow).
+2. Open the example workflow and click Run with **accept_licenses** on in the
+   **MotionBridge Setup** node. The first run downloads, into `ComfyUI/models/motionbridge`:
+   - GEM-X source and model weights from `nvidia/GEM-X` (~6.7 GB, no account needed)
+   - GEM's own Python environment (~6 GB), built with uv so ComfyUI's packages are untouched
+   - Blender 5.0 (~0.4 GB), only if no Blender is installed
+
+   Later runs skip all of this. Downloads resume if interrupted.
+3. H3 models: ComfyUI offers to download any missing ones when the workflow opens
+   (official `Comfy-Org/MiniMax-H3` files plus the lightx2v turbo LoRA, ~42 GB).
+
+Requirements: Windows x64, an NVIDIA GPU with 8 GB+ VRAM, ~60 GB free disk.
+Video to Motion unloads H3 from VRAM before GEM runs, so both fit on 8 GB.
+
+**Characters:** BLEND, GLB, GLTF or FBX with a humanoid skeleton, any bone names and
+proportions. Pack textures into a BLEND (File > External Data > Pack Resources) before
+uploading it; Load Character warns when textures are missing.
+
+## Nodes
+
+| Node | Does |
+| --- | --- |
+| MotionBridge Setup | One-time download and check of everything outside ComfyUI |
+| Load Character | Finds hips, spine, neck, head, arms, legs, feet and fingers by shape |
+| Render Starting Views | Matching front / three-quarter (/ hands) views of the character for H3 |
+| Video to Motion (GEM) | 77-joint 3D motion from H3 output or any video |
+| Retarget Motion | Motion onto the character, its proportions kept, planted feet pinned |
+| Export Animated Character | BLEND + FBX + GLB, checked bone by bone, plus a preview video |
 
 ## Layout
 

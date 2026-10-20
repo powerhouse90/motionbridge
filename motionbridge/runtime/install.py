@@ -98,10 +98,10 @@ class Runtime:
         gaps = []
         if not (self.gem_root / 'gem' / '__init__.py').exists():
             gaps.append('GEM-X source code')
-        for _, place, size in WEIGHTS:
-            p = self.gem_root / place
-            if not p.exists() or (size and p.stat().st_size != size):
-                gaps.append(f'model file {Path(place).name}')
+        weights = [place for _, place, size in WEIGHTS if not (self.gem_root / place).exists()
+                   or (size and (self.gem_root / place).stat().st_size != size)]
+        if weights:
+            gaps.append(f'GEM model weights ({len(weights)} of {len(WEIGHTS)} files)')
         if not (self.gem_root / 'inputs' / 'soma_assets' / 'SOMA_neutral.npz').exists():
             gaps.append('SOMA body model assets')
         if not self.state().get('env_ready') or not self.gem_python.exists():
@@ -195,11 +195,16 @@ def link_dir(link, target):
 def run(command, rt, **kwargs):
     log('  $ ' + ' '.join(str(c) for c in command))
     env = {**rt.gem_env(), 'UV_PYTHON_INSTALL_DIR': str(rt.home / 'python'), 'UV_CACHE_DIR': str(rt.home / 'uv_cache')}
-    result = subprocess.run([str(c) for c in command], env=env, capture_output=True, text=True, **kwargs)
-    if result.returncode:
-        raise RuntimeError(f'command failed ({result.returncode}): {command[0]} ...\n'
-                           + (result.stdout + result.stderr)[-3000:])
-    return result.stdout
+    # Stream the output: the environment install takes many minutes and should visibly progress.
+    process = subprocess.Popen([str(c) for c in command], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, encoding='utf-8', errors='replace', **kwargs)
+    lines = []
+    for line in process.stdout:
+        lines.append(line)
+        log('    ' + line.rstrip())
+    if process.wait():
+        raise RuntimeError(f'command failed ({process.returncode}): {command[0]} ...\n' + ''.join(lines)[-3000:])
+    return ''.join(lines)
 
 
 def install(home, accept_licenses=False, blender='auto', progress=None):

@@ -81,18 +81,20 @@ class LoadCharacter(io.ComfyNode):
                 io.String.Input('asset_file', default='', tooltip='Use the upload button, or a path relative to ComfyUI/input.'),
                 io.String.Input('armature_name', default='', advanced=True,
                                 tooltip='Only needed when the file holds more than one armature.'),
+                io.String.Input('setup', optional=True, force_input=True,
+                                tooltip='Connect MotionBridge Setup here so one Run installs first, then animates.'),
             ],
             outputs=[Character.Output(display_name='character'), io.String.Output(display_name='bone map')])
 
     @classmethod
-    def fingerprint_inputs(cls, asset_file, armature_name=''):
+    def fingerprint_inputs(cls, asset_file, armature_name='', setup=None):
         try:
             return digest(resolve_input(asset_file), armature_name)
         except (OSError, ValueError):
             return float('nan')
 
     @classmethod
-    def execute(cls, asset_file, armature_name=''):
+    def execute(cls, asset_file, armature_name='', setup=None):
         from motionbridge.core import rigmap
         asset = resolve_input(asset_file)
         folder = output_folder('characters', f'{asset.stem}_{digest(asset, armature_name)}')
@@ -110,6 +112,10 @@ class LoadCharacter(io.ComfyNode):
         lines += [f'  {role:>14}: {bone if isinstance(bone, str) else " > ".join(bone)}  ({m.confidence.get(role, 1.0):.1f})'
                   for role, bone in m.roles.items()]
         lines += [f'  note: {n}' for n in m.notes]
+        if dump.get('missing_images'):
+            lines.append(f"  WARNING: {len(dump['missing_images'])} texture(s) not found, so the character renders "
+                         f"untextured. In Blender use File > External Data > Pack Resources, or use a GLB/FBX "
+                         f"with embedded textures. Missing: {', '.join(dump['missing_images'][:5])}")
         character = {'file': str(asset), 'name': asset.stem, 'armature': dump['armature'], 'dump': str(dump_file)}
         text = '\n'.join(lines)
         return io.NodeOutput(character, text, ui=ui.PreviewText(text))

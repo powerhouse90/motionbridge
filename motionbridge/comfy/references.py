@@ -59,11 +59,12 @@ class RenderStartingViews(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(node_id='MotionBridgeRenderStartingViews',display_name='Render Starting Views',category='MotionBridge/References',description='Render matching front, elevated three-quarter and optional hand views from one native 3D pose. Upload a rigged GLB/FBX or a BLEND scene.',is_output_node=True,
-            inputs=[io.String.Input('asset_file',default='',tooltip='Use Upload character / scene, or a path relative to ComfyUI input.'),io.Combo.Input('layout',options=LAYOUTS,default=LAYOUTS[0]),io.Int.Input('frame',default=1,min=0,max=100000),io.Int.Input('panel_width',default=528,min=128,max=2048,step=16),io.Int.Input('panel_height',default=704,min=128,max=2048,step=16),io.Combo.Input('framing',options=['character and props','character only'],default='character and props'),io.Combo.Input('front_direction',options=['auto','-Y','+Y','-X','+X'],default='auto'),io.Float.Input('threequarter_angle',default=50,min=15,max=80,step=1),io.Float.Input('elevation',default=25,min=0,max=60,step=1),io.String.Input('armature_name',default='',advanced=True),io.String.Input('left_hand_bone',default='',advanced=True),io.String.Input('right_hand_bone',default='',advanced=True),io.String.Input('blender_executable',default='',advanced=True)],
+            inputs=[io.String.Input('asset_file',default='',tooltip='Use Upload character / scene, or a path relative to ComfyUI input. Ignored when a character is connected.'),io.Custom('MOTIONBRIDGE_CHARACTER').Input('character',optional=True,tooltip='From Load Character: render that file and armature.'),io.Combo.Input('layout',options=LAYOUTS,default=LAYOUTS[0]),io.Int.Input('frame',default=1,min=0,max=100000),io.Int.Input('panel_width',default=528,min=128,max=2048,step=16),io.Int.Input('panel_height',default=704,min=128,max=2048,step=16),io.Combo.Input('framing',options=['character and props','character only'],default='character and props'),io.Combo.Input('front_direction',options=['auto','-Y','+Y','-X','+X'],default='auto'),io.Float.Input('threequarter_angle',default=50,min=15,max=80,step=1),io.Float.Input('elevation',default=25,min=0,max=60,step=1),io.String.Input('armature_name',default='',advanced=True),io.String.Input('left_hand_bone',default='',advanced=True),io.String.Input('right_hand_bone',default='',advanced=True),io.String.Input('blender_executable',default='',advanced=True)],
             outputs=[io.Image.Output(display_name='H3 reference'),io.Image.Output(display_name='front'),io.Image.Output(display_name='threequarter'),io.Image.Output(display_name='hands'),io.String.Output(display_name='camera metadata')])
 
     @classmethod
-    def fingerprint_inputs(cls,asset_file,**kwargs):
+    def fingerprint_inputs(cls,asset_file,character=None,**kwargs):
+        if character:asset_file=character['file'];kwargs['armature_name']=character['armature']
         try:
             asset=resolve_asset(asset_file);out=cache_folder(asset,kwargs);manifest=out/'metadata.json'
             deps=json.loads(manifest.read_text()).get('dependencies',[]) if manifest.exists() else []
@@ -71,7 +72,8 @@ class RenderStartingViews(io.ComfyNode):
         except (OSError,ValueError):return float('nan')
 
     @classmethod
-    def execute(cls,asset_file,**settings):
+    def execute(cls,asset_file,character=None,**settings):
+        if character:asset_file=character['file'];settings['armature_name']=character['armature']
         asset=resolve_asset(asset_file);binary=blender_path(settings.get('blender_executable',''));out=cache_folder(asset,settings);out.mkdir(parents=True,exist_ok=True);manifest=out/'metadata.json'
         metadata=json.loads(manifest.read_text()) if manifest.exists() else None
         ready=metadata is not None and all((out/(v+'.png')).exists() for v in ('front','threequarter','hands')) and metadata.get('dependency_signature')==dependency_signature(metadata.get('dependencies',[]))
