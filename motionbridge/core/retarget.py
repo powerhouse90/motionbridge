@@ -295,10 +295,18 @@ RELATIVE_LIMB = {'Shoulder', 'Foot', 'ToeBase'}
 USE_HIP_DROP, USE_PELVIS_ROLL = True, True  # switches kept for diagnosis
 USE_CHEST_TURN = True
 ROOT_FULL_PLANTS_ONLY = False
-ROOT_SMOOTH = 0         # frames; smoothing the root correction smeared it into single support (knee snaps 15 deg)
+ROOT_SMOOTH = 2         # frames; halves body wobble at foot hand-offs. Was 0 when it caused 15-degree knee
+                        # snaps, before KEEP_LEG_LENGTH; re-tested with it: no new snaps
 KEEP_LEG_LENGTH = True  # stance legs keep their transferred length (see the IK below)
 MAX_ROLL = np.radians(12)  # pelvis roll limit for planting both feet
+EASE = True
 REACH = 0.9999   # essentially full length; 0.995 forced ~11 degrees of knee bend on straight legs
+
+
+def _ease(x):
+    """Smoothstep, or linear with EASE off. Easing a foot in or out of a plant hands the body's root
+    correction from one foot to the other; a linear ramp's corners showed as a jolt at every step."""
+    return x * x * (3 - 2 * x) if EASE else x
 
 
 def _swing_batch(a, b):
@@ -376,7 +384,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
                 gap = target[a - 1] + (ankle[a] - ankle[a - 1]) - target[a]
                 for k in range(BLEND + 1):
                     if a + k < T and labels[a + k] == labels[a]:
-                        target[a + k] += gap * (1 - (k + 1) / (BLEND + 2))
+                        target[a + k] += gap * _ease(1 - (k + 1) / (BLEND + 2))
         weight = np.zeros(T)
         planted = ~np.isnan(target[:, 0])
         for t in range(T):  # ease in/out around each plant, aiming at the nearest planted spot
@@ -386,7 +394,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             near = [u for u in range(max(0, t - BLEND), min(T, t + BLEND + 1)) if planted[u]]
             if near:
                 u = min(near, key=lambda u: abs(u - t))
-                weight[t] = 1 - abs(u - t) / (BLEND + 1)
+                weight[t] = _ease(1 - abs(u - t) / (BLEND + 1))
                 target[t] = ankle[t] + (target[u] - ankle[u])  # carry the nearest plant's correction
         goal = ankle.copy()
         mask = weight > 0

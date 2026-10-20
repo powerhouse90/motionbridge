@@ -51,8 +51,9 @@ def graph(character, take, defaults, unet, accept, seed):
         'motion': {'class_type': 'MotionBridgeVideoToMotion', 'inputs': {
             'images': ['decode', 0], 'fps': 24.0, 'panel': 'left half (front view of 2)',
             'camera': 'rendered reference (orthographic)'}},
+        'smooth': {'class_type': 'MotionBridgeSmoothMotion', 'inputs': {'motion': ['motion', 0], 'strength': 0.5}},
         'retarget': {'class_type': 'MotionBridgeRetarget', 'inputs': {
-            'character': ['character', 0], 'motion': ['motion', 0], 'action_name': take['name'], 'foot_ik': True}},
+            'character': ['character', 0], 'motion': ['smooth', 0], 'action_name': take['name'], 'foot_ik': True}},
         'export': {'class_type': 'MotionBridgeExport', 'inputs': {
             'animation': ['retarget', 0], 'filename_prefix': 'motionbridge/character', 'glb': True,
             'preview': 'follow'}},

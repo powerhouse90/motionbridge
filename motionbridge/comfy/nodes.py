@@ -186,6 +186,31 @@ class VideoToMotion(io.ComfyNode):
         return io.NodeOutput({'file': str(motion_file), 'fps': fps, 'source': str(folder / 'source.mp4')})
 
 
+class SmoothMotion(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id='MotionBridgeSmoothMotion', display_name='Smooth Motion', category='MotionBridge',
+            description='Remove frame-to-frame wobble from extracted motion. Adaptive: slow joints are smoothed '
+                        'hard, fast ones (punches, kicks) barely, so strikes keep their snap. No lag.',
+            inputs=[
+                Motion.Input('motion'),
+                io.Float.Input('strength', default=0.5, min=0.0, max=1.0, step=0.05,
+                               tooltip='0 = off. 0.5 suits most clips; raise it for very shaky video.'),
+            ],
+            outputs=[Motion.Output(display_name='motion')])
+
+    @classmethod
+    def execute(cls, motion, strength):
+        from motionbridge.core import smooth, soma
+        if strength <= 0:
+            return io.NodeOutput(motion)
+        out = Path(motion['file']).with_name(f'motion_smooth{strength:g}.npz')
+        if not out.exists():
+            smooth.smooth(soma.load(motion['file']), strength).save(out)
+        return io.NodeOutput({**motion, 'file': str(out)})
+
+
 class Retarget(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -281,4 +306,4 @@ class Export(io.ComfyNode):
         return io.NodeOutput(video_out, text, ui=ui_out)
 
 
-NODES = [Setup, LoadCharacter, VideoToMotion, Retarget, Export]
+NODES = [Setup, LoadCharacter, VideoToMotion, SmoothMotion, Retarget, Export]

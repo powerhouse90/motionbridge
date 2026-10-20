@@ -46,3 +46,9 @@ name = "walk_diagonal"
 layout = "front + 3/4"
 action = "She walks naturally diagonally across the frame from the back left to the front right: four relaxed steps with an upright posture, head level and eyes looking ahead in her walking direction, clear heel strikes, straight stance legs, toe-offs and alternating arm swing, then stops with both feet planted. Her whole body stays inside each panel."
 why = "Walk seen at an angle: knee bend and head pitch are visible to single-view reconstruction, unlike walking straight at the camera"
+
+[[takes]]
+name = "attack"
+layout = "front + 3/4"
+action = "Fighting-game attack: she drops into a bouncing fighting stance with fists up, throws a fast left jab and a hard right cross with full hip rotation, then pivots on her left foot into a high right roundhouse kick at head height, and lands back in her fighting stance. Snappy, powerful, athletic martial-arts motion. She stays in place facing the front camera, her whole body inside each panel."
+why = "Fast, dynamic motion: strikes must stay sharp through smoothing; single-leg pivot and high kick stress foot contacts and balance"
