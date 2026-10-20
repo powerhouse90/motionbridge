@@ -63,8 +63,10 @@ with torch.no_grad():
         for space in ['incam','global']:
             params={k:v.cuda() for k,v in _get_body_params(pred,'body_params_'+space).items()};body=soma(**params)
             result[space+'_joints']=body['joints'].cpu().numpy();result[space+'_transforms']=captured['transforms']
+            if 'vertices' in body:result[space+'_vertices']=body['vertices'].cpu().numpy().astype(np.float32)  # body mesh for visual review
         ident=params['identity_coeffs'].reshape(-1,params['identity_coeffs'].shape[-1]).mean(0,keepdim=True);scales=params['scale_params'].reshape(-1,params['scale_params'].shape[-1]).mean(0,keepdim=True);soma.get_skeleton(ident,scales);result['reference_transforms']=captured['transforms']
         skeleton=np.load(root/'inputs/soma_assets/SOMA_neutral.npz',allow_pickle=True);result['names']=np.asarray(skeleton['joint_names'],dtype=str);result['parents']=np.asarray(skeleton['joint_parent_ids']);result['K']=pred['K_fullimg'].cpu().numpy()
+        if hasattr(soma,'faces'):result['faces']=np.asarray(soma.faces.cpu() if hasattr(soma.faces,'cpu') else soma.faces)
         np.savez_compressed(out/'motion_export.npz',**result)
         (out/'extraction.json').write_text(json.dumps({'motion':str(out/'motion_export.npz'),'keypoints':str(Path(cfg.paths.vitpose).resolve()),'video':str(video),'camera_assumption':'static inference; output fitting remains camera-relative'},indent=2))
 print('BACKEND_STAGE_DONE',a.stage,flush=True)
