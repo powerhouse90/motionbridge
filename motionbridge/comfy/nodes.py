@@ -233,8 +233,9 @@ class Export(io.ComfyNode):
                 Animation.Input('animation'),
                 io.String.Input('filename_prefix', default='motionbridge/character'),
                 io.Boolean.Input('glb', default=True, tooltip='Also save a GLB (opens in ComfyUI\'s 3D viewer).'),
-                io.Combo.Input('preview', options=['front three-quarter', 'front', 'profile', 'none'],
-                               default='front three-quarter'),
+                io.Combo.Input('preview', options=['follow', 'front', 'profile', 'whole path', 'none'],
+                               default='follow', tooltip='follow: three-quarter camera that moves with the '
+                                                         'character. whole path: one fixed shot of the full clip.'),
             ],
             outputs=[io.Video.Output(display_name='preview'), io.String.Output(display_name='files')])
 
@@ -264,7 +265,7 @@ class Export(io.ComfyNode):
 
         video_out, ui_out = None, ui.PreviewText(text)
         if preview != 'none':
-            view = {'front three-quarter': 'front34', 'front': 'front', 'profile': 'profile'}[preview]
+            view = {'follow': 'follow', 'whole path': 'front34', 'front': 'front', 'profile': 'profile'}[preview]
             roles = rigmap.build(json.loads(Path(character['dump']).read_text())).roles
             frames_dir = folder / f'preview_{view}'
             run_blender('render_preview.py', ['--blend', blend, '--actions', animation['name'], '--outdir', frames_dir,

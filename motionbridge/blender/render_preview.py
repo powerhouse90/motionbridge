@@ -52,7 +52,7 @@ def main():
     p.add_argument('--actions', nargs='+', required=True)
     p.add_argument('--outdir', required=True)
     p.add_argument('--size', nargs=2, type=int, default=[360, 480])
-    p.add_argument('--view', choices=['front34', 'side', 'profile', 'front'], default='front34')
+    p.add_argument('--view', choices=['front34', 'follow', 'side', 'profile', 'front'], default='front34')
     p.add_argument('--hips-pair', nargs=2, metavar=('LEFT_THIGH', 'RIGHT_THIGH'),
                    help='profile view: thigh bones that give the body left-right axis each frame')
     p.add_argument('--square-pair', nargs=2, metavar=('LEFT', 'RIGHT'),
@@ -96,17 +96,20 @@ def main():
         rig.animation_data.action = bpy.data.actions[action]
         start, end = (int(x) for x in bpy.data.actions[action].frame_range)
         scene.frame_start, scene.frame_end = start, end
-        pts = []
+        pts, body = [], 0.0
         for f in range(start, end + 1, 6):
             scene.frame_set(f)
-            pts += mesh_points(meshes)
+            frame_pts = mesh_points(meshes)
+            pts += frame_pts
+            body = max(body, (Vector([max(q[i] for q in frame_pts) for i in range(3)]) -
+                              Vector([min(q[i] for q in frame_pts) for i in range(3)])).length / 2)
         lo = Vector([min(q[i] for q in pts) for i in range(3)])
         hi = Vector([max(q[i] for q in pts) for i in range(3)])
         lo.z = floor_z
         centre = (lo + hi) / 2
         radius = (hi - lo).length / 2
         # Front three-quarter, 15 degrees above (or a level profile). The rigs here face -Y.
-        yaw, pitch = (30, 15) if a.view == 'front34' else (90, 0)
+        yaw, pitch = (30, 15) if a.view in ('front34', 'follow') else (90, 0)
         direction = Vector((math.sin(math.radians(yaw)), -math.cos(math.radians(yaw)), math.tan(math.radians(pitch))))
         direction.normalize()
         fov = 2 * math.atan(36 / 2 / cam_data.lens) * min(1, a.size[0] / a.size[1])
@@ -114,7 +117,23 @@ def main():
         cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
         target = outdir / (action if a.view == 'front34' else action + '_' + a.view)
         target.mkdir(parents=True, exist_ok=True)
-        if a.view not in ('profile', 'front'):
+        if a.view == 'follow':
+            # Front three-quarter that slides with the body (smoothed pelvis), sized to the body, not the path.
+            track = []
+            for f in range(start, end + 1):
+                scene.frame_set(f)
+                track.append(((rig.matrix_world @ rig.pose.bones[a.hips_pair[0]].head) +
+                              (rig.matrix_world @ rig.pose.bones[a.hips_pair[1]].head)) / 2)
+            distance = body / math.sin(fov / 2) * 1.0
+            for i, f in enumerate(range(start, end + 1)):
+                window = track[max(0, i - 6):i + 7]
+                pelvis = sum(window, Vector()) / len(window)
+                scene.frame_set(f)
+                cam.location = Vector((pelvis.x, pelvis.y, floor_z + body)) + direction * distance
+                cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
+                scene.render.filepath = str(target / f'{f:04d}.png')
+                bpy.ops.render.render(write_still=True)
+        elif a.view not in ('profile', 'front'):
             scene.render.filepath = str(target) + '/'
             bpy.ops.render.render(animation=True)
         else:

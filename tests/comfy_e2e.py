@@ -55,7 +55,7 @@ def graph(character, take, defaults, unet, accept, seed):
             'character': ['character', 0], 'motion': ['motion', 0], 'action_name': take['name'], 'foot_ik': True}},
         'export': {'class_type': 'MotionBridgeExport', 'inputs': {
             'animation': ['retarget', 0], 'filename_prefix': 'motionbridge/character', 'glb': True,
-            'preview': 'front three-quarter'}},
+            'preview': 'follow'}},
     }
 
 
