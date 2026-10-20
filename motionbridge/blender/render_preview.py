@@ -86,6 +86,11 @@ def main():
     sun = bpy.data.objects.new('key', sun_data)
     sun.rotation_euler = (math.radians(50), 0, math.radians(30))
     scene.collection.objects.link(sun)
+    # Fill from the opposite side, so a profile camera on the key's far side does not see a silhouette.
+    fill = bpy.data.objects.new('fill', bpy.data.lights.new('fill', 'SUN'))
+    fill.data.energy = 1.5
+    fill.rotation_euler = (math.radians(60), 0, math.radians(210))
+    scene.collection.objects.link(fill)
     cam_data = bpy.data.cameras.new('view')
     cam_data.lens = 50
     cam = bpy.data.objects.new('view', cam_data)
