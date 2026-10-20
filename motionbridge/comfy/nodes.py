@@ -44,7 +44,7 @@ class Setup(io.ComfyNode):
                                  tooltip='Required before anything is downloaded. Licenses are listed in the node description.'),
                 io.Combo.Input('blender', options=['use installed, else download', 'always download'],
                                default='use installed, else download'),
-                io.String.Input('blender_executable', default='', advanced=True,
+                io.String.Input('blender_executable', default='', advanced=True, optional=True,
                                 tooltip='Use this Blender (4.2+) instead of finding or downloading one.'),
             ],
             outputs=[io.String.Output(display_name='status')])
@@ -79,7 +79,7 @@ class LoadCharacter(io.ComfyNode):
                         'shape: hips, spine, neck, head, arms, legs, feet and fingers, whatever they are named.',
             inputs=[
                 io.String.Input('asset_file', default='', tooltip='Use the upload button, or a path relative to ComfyUI/input.'),
-                io.String.Input('armature_name', default='', advanced=True,
+                io.String.Input('armature_name', default='', advanced=True, optional=True,
                                 tooltip='Only needed when the file holds more than one armature.'),
                 io.String.Input('setup', optional=True, force_input=True,
                                 tooltip='Connect MotionBridge Setup here so one Run installs first, then animates.'),
@@ -198,7 +198,7 @@ class Retarget(io.ComfyNode):
                 Motion.Input('motion'),
                 io.String.Input('action_name', default='motion', tooltip='Name of the animation clip in the exported file.'),
                 io.Boolean.Input('foot_ik', default=True, tooltip='Pin planted feet to the floor.'),
-                io.Combo.Input('head', options=['face', 'carriage'], default='face', advanced=True,
+                io.Combo.Input('head', options=['face', 'carriage'], default='face', advanced=True, optional=True,
                                tooltip='face: the face points where the performer\'s face points. carriage: keep '
                                        'the character\'s built-in head pose and add the performer\'s change.'),
             ],
