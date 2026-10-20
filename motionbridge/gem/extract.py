@@ -18,9 +18,11 @@ def extract(video, out, gem_root, gem_python, focal_scale=1.0):
     out.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(video.read_bytes()).hexdigest()
     receipt = out / 'input.json'
-    if receipt.exists() and json.loads(receipt.read_text())['sha256'] != digest:
-        raise ValueError(f'{out} holds an extraction of different video bytes; choose a new folder')
-    receipt.write_text(json.dumps({'video': video.as_posix(), 'sha256': digest}, indent=1))
+    if receipt.exists():
+        old = json.loads(receipt.read_text())
+        if old['sha256'] != digest or old.get('focal_scale', 1.0) != focal_scale:
+            raise ValueError(f'{out} holds an extraction of different video bytes or lens; choose a new folder')
+    receipt.write_text(json.dumps({'video': video.as_posix(), 'sha256': digest, 'focal_scale': focal_scale}, indent=1))
     backend = Path(__file__).with_name('backend.py')
     for stage in STAGES:
         done = out / f'{stage}.done'

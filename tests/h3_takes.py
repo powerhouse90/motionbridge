@@ -24,6 +24,10 @@ ROOT = configuration.ROOT
 # Off: fitting GEM's head to ViTPose face points tilted heads further DOWN on the mesh (checked on
 # the walk against the H3 frame). Kept for a later, face-model-based head pose.
 HEAD_POSE = False
+# H3 animates an orthographic reference render, but GEM assumes a ~53 degree lens, which hunched every
+# take. 8x its focal length approximates the orthographic camera (tested 1x/4x/8x/16x on walk_diagonal).
+FOCAL_SCALE = 8.0
+EXTRACTION = 'extraction_f8'
 PANELS = {'front + 3/4': ['front', 'threequarter'], 'front + 3/4 + hands': ['front', 'threequarter', 'hands']}
 
 
@@ -126,15 +130,15 @@ def collect(config):
             if view == 'hands':
                 continue  # the hand panel feeds the finger pass later, not body extraction
             started = time.time()
-            motion_file = extract(panel, out / view / 'extraction', config['paths']['gem_root'],
-                                  config['paths']['gem_python'])
+            motion_file = extract(panel, out / view / EXTRACTION, config['paths']['gem_root'],
+                                  config['paths']['gem_python'], FOCAL_SCALE)
             print(f"{take['name']}/{view}: GEM done in {time.time() - started:.0f} s")
         import_take(config, take)
 
 
 def import_take(config, take):
     """Front-panel GEM motion -> golden motion, with the head pitch corrected against the 2D face."""
-    extraction = folder(config, take) / 'front' / 'extraction'
+    extraction = folder(config, take) / 'front' / EXTRACTION
     motion = soma.from_gem_export(extraction / 'motion_export.npz', 24)
     if HEAD_POSE:
         keypoints = torch.load(extraction / 'capture' / 'preprocess' / 'vitpose.pt').numpy()
@@ -148,7 +152,7 @@ def reimport(config):
     """Rebuild every golden H3 motion from its existing extraction (no GPU)."""
     _, all_takes = takes()
     for take in all_takes:
-        if (folder(config, take) / 'front' / 'extraction' / 'motion_export.npz').exists():
+        if (folder(config, take) / 'front' / EXTRACTION / 'motion_export.npz').exists():
             import_take(config, take)
 
 

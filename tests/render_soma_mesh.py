@@ -21,16 +21,19 @@ def prepare(export, out):
     to_blender = np.column_stack([left, -fwd, [0, 1, 0]]).T  # rows: Blender X(left), Y(back), Z(up)
     v = d['global_vertices'] @ yaw.T @ to_blender.T
     hips = motion.positions[:, [motion.index('LeftLeg'), motion.index('RightLeg')]] @ yaw.T @ to_blender.T
+    shoulders = motion.positions[:, [motion.index('LeftArm'), motion.index('RightArm')]] @ yaw.T @ to_blender.T
     floor = np.percentile(v[..., 2].min(axis=1), 5)
     shift = v[0, :, :2].mean(axis=0)
     v[..., 2] -= floor
-    hips[..., 2] -= floor
     v[..., :2] -= shift
-    hips[..., :2] -= shift
-    np.savez_compressed(out, vertices=v.astype(np.float32), faces=d['faces'], hips=hips.astype(np.float32))
+    for pair in (hips, shoulders):
+        pair[..., 2] -= floor
+        pair[..., :2] -= shift
+    np.savez_compressed(out, vertices=v.astype(np.float32), faces=d['faces'], hips=hips.astype(np.float32),
+                        shoulders=shoulders.astype(np.float32))
 
 
-def render(frames_file, outdir, view):
+def render(frames_file, outdir, view, track='hips'):
     import bpy
     from mathutils import Vector
     data = np.load(frames_file)
@@ -88,7 +91,7 @@ def render(frames_file, outdir, view):
         mesh.vertices.foreach_set('co', verts[t].ravel())
         mesh.update()
         if view in ('profile', 'front'):  # same tracking camera as render_mesh_video, level
-            l_hip, r_hip = Vector(data['hips'][t, 0].tolist()), Vector(data['hips'][t, 1].tolist())
+            l_hip, r_hip = Vector(data[track][t, 0].tolist()), Vector(data[track][t, 1].tolist())
             side = r_hip - l_hip
             side.z = 0
             side.normalize()
@@ -108,7 +111,9 @@ if __name__ == '__main__':
         p.add_argument('--frames', required=True)
         p.add_argument('--outdir', required=True)
         p.add_argument('--view', default='side')
+        p.add_argument('--track', choices=['hips', 'shoulders'], default='hips',
+                       help='which left-right pair the tracking camera squares up to')
         a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
-        render(str(Path(a.frames).resolve()), str(Path(a.outdir).resolve()), a.view)
+        render(str(Path(a.frames).resolve()), str(Path(a.outdir).resolve()), a.view, a.track)
     else:
         prepare(sys.argv[2], sys.argv[3])

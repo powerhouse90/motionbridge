@@ -4,10 +4,13 @@ python -m tests.golden import    copy GEM exports listed in config.toml into gol
 python -m tests.golden motions   metrics + contact sheet for every golden motion
 python -m tests.golden rigs      inspect every rig listed in config.toml with Blender
 python -m tests.golden all       motions + rigs
+python -m tests.golden compare h3_crouch [h3_jump ...]   GEM's own body next to every baked character,
+                                 tracking profile and front views (run retarget and bake first)
 """
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import cv2
@@ -201,6 +204,72 @@ def meshvideo_report(config, motions=None):
         print(f'wrote {out / (motion + ".mp4")}')
 
 
+TILE = (360, 420)
+# Profile squares to the pelvis (legs, posture); front squares to the shoulders, because a posed rest can
+# turn the chest from the pelvis and a pelvis-facing camera then shows the arms turned with it.
+TRACK = {'profile': 'hips', 'front': 'shoulders'}
+
+
+def compare_report(config, motions):
+    """The check every new clip goes through: GEM's body (no retargeting) beside each textured character,
+    same tracking cameras, profile row over front row, H3 source on the left."""
+    from motionbridge.core import rigmap
+    runs = Path(config['paths']['runs'])
+    out = runs / 'golden' / 'compare'
+    blender = config['paths']['blender']
+    for motion in motions:
+        take = runs / 'h3' / motion.removeprefix('h3_') / 'front'
+        export = take / 'extraction_f8' / 'motion_export.npz'
+        rigs = [r for r in config['rigs'] if (runs / 'golden' / 'bake' / f"{r['name']}.blend").exists()]
+        frames = out / f'gem_{motion}.npz'
+        if export.exists():
+            out.mkdir(parents=True, exist_ok=True)
+            subprocess.run([sys.executable, '-m', 'tests.render_soma_mesh', 'prepare', str(export), str(frames)],
+                           check=True, cwd=ROOT)
+        for view in ('profile', 'front'):
+            if export.exists():
+                subprocess.run([blender, '-b', '--python-exit-code', '1', '--python',
+                                str(ROOT / 'tests' / 'render_soma_mesh.py'), '--', '--frames', str(frames),
+                                '--outdir', str(out / 'gem' / f'{motion}_{view}'), '--view', view,
+                                '--track', TRACK[view]],
+                               check=True, capture_output=True)
+            for rig in rigs:
+                roles = rigmap.build(json.loads((runs / 'golden' / 'rigs' / f"{rig['name']}.json").read_text())).roles
+                done = subprocess.run([blender, '-b', '--python-exit-code', '1', '--python',
+                                       str(ROOT / 'tests' / 'render_mesh_video.py'), '--', '--blend',
+                                       str(runs / 'golden' / 'bake' / f"{rig['name']}.blend"), '--actions', motion,
+                                       '--outdir', str(out / rig['name']), '--view', view, '--size', *map(str, TILE),
+                                       '--hips-pair', roles['LeftLeg'], roles['RightLeg'],
+                                       *(['--square-pair', roles['LeftArm'], roles['RightArm']]
+                                         if TRACK[view] == 'shoulders' else [])],
+                                      capture_output=True, text=True)
+                if done.returncode:
+                    raise RuntimeError(f"{rig['name']} {view}:\n{(done.stdout + done.stderr)[-1500:]}")
+            print(f'rendered {motion} {view}')
+        capture, src = cv2.VideoCapture(str(take / 'source.mp4')), []
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            src.append(cv2.resize(frame, TILE))
+        rows = []
+        for view in ('profile', 'front'):
+            tiles = [(out / 'gem' / f'{motion}_{view}', f'GEM body ({view})')]
+            tiles += [(out / r['name'] / f'{motion}_{view}', r['name']) for r in rigs]
+            length = len(list(tiles[-1][0].glob('*.png')))
+            row = []
+            for t in range(length):
+                cells = [label(src[min(t, len(src) - 1)].copy(), 'H3 source') if src else np.full((TILE[1], TILE[0], 3), 30, np.uint8)]
+                for folder, title in tiles:
+                    png = folder / f'{t + 1:04d}.png'
+                    img = cv2.resize(cv2.imread(str(png)), TILE) if png.exists() else np.full((TILE[1], TILE[0], 3), 30, np.uint8)
+                    cells.append(label(img, title))
+                row.append(np.hstack(cells))
+            rows.append(row)
+        render.write_video(out / f'{motion}.mp4', rows, 24)
+        print(f'wrote {out / (motion + ".mp4")}')
+
+
 def bake_report(config):
     """Key every retarget result onto its real character in Blender and check it against the core."""
     runs = Path(config['paths']['runs']) / 'golden'
@@ -308,7 +377,8 @@ def maps_report(config):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('command', choices=['import', 'motions', 'rigs', 'map', 'retarget', 'bake', 'meshvideo', 'all'])
+    p.add_argument('command', choices=['import', 'motions', 'rigs', 'map', 'retarget', 'bake', 'meshvideo', 'compare', 'all'])
+    p.add_argument('motions', nargs='*', help='compare: golden motion names')
     p.add_argument('--config')
     a = p.parse_args()
     config = configuration.load(a.config)
@@ -326,6 +396,8 @@ def main():
         bake_report(config)
     if a.command in ('meshvideo', 'all'):
         meshvideo_report(config)
+    if a.command == 'compare':
+        compare_report(config, a.motions)
 
 
 if __name__ == '__main__':

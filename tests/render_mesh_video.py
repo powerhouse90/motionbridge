@@ -55,6 +55,8 @@ def main():
     p.add_argument('--view', choices=['front34', 'side', 'profile', 'front'], default='front34')
     p.add_argument('--hips-pair', nargs=2, metavar=('LEFT_THIGH', 'RIGHT_THIGH'),
                    help='profile view: thigh bones that give the body left-right axis each frame')
+    p.add_argument('--square-pair', nargs=2, metavar=('LEFT', 'RIGHT'),
+                   help='square the camera to this pair instead (e.g. upper arms, to judge the upper body)')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     outdir = Path(a.outdir).resolve()
     bpy.ops.wm.open_mainfile(filepath=str(Path(a.blend).resolve()))
@@ -122,7 +124,8 @@ def main():
                 scene.frame_set(f)
                 l_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[0]].head
                 r_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[1]].head
-                side = (r_thigh - l_thigh)
+                pair = a.square_pair or a.hips_pair
+                side = (rig.matrix_world @ rig.pose.bones[pair[1]].head) - (rig.matrix_world @ rig.pose.bones[pair[0]].head)
                 side.z = 0
                 side.normalize()
                 pelvis = (l_thigh + r_thigh) / 2

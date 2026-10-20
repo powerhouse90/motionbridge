@@ -200,11 +200,22 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
 
     pairs = _pairs(rigmap.roles, {n: rest[index[n], :3, 3] for n in names},
                    {n: soma_rest[j(n)] for n in SPINE + NECK + ['Head']})
+    # A posed rest can turn the chest away from the pelvis (one rig's idle rest has 7.6 degrees of
+    # contrapposto). The trunk moves relative to its own rest, so arms and face are aimed relative to the
+    # rig's shoulder line, not the pelvis front: otherwise every reach is skewed by that turn.
+    roles_ = rigmap.roles
+    shoulders = rest[index[roles_['LeftArm']], :3, 3] - rest[index[roles_['RightArm']], :3, 3]
+    shoulders -= up * shoulders.dot(up)
+    chest_turn = _swing(left, shoulders) if USE_CHEST_TURN and np.linalg.norm(shoulders) > 1e-6 else np.eye(3)
+    upper = {roles_[s + r] for s in ('Left', 'Right') for r in ('Arm', 'ForeArm', 'Hand') if s + r in roles_}
+    upper |= {b for k, v in roles_.items() if 'Hand' in k and isinstance(v, list) for b in v}  # fingers
     target_rot = {}
     for bone, sj, sk, nxt, align in pairs:
         b = index[bone]
         bone_dir = (rest[index[nxt], :3, 3] - rest[b, :3, 3]) if nxt else rest[b, :3, 1]
         seg = soma_rest[j(sk)] - soma_rest[j(sj)]
+        if bone in upper:
+            seg = chest_turn @ seg
         a = _swing(bone_dir, seg) if align and np.linalg.norm(bone_dir) > 1e-6 else np.eye(3)
         target_rot[b] = np.einsum('tab,bc->tac', rotations[:, j(sj)], a @ rest[b, :3, :3])
     if head == 'face':
@@ -213,7 +224,7 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
         # straight ahead along the rig's front) instead.
         hb = index[rigmap.roles['Head']]
         soma_face = convert @ motion.rest[j('Head'), :3, :3] @ SOMA_FACE_IN_HEAD
-        rig_face = np.column_stack([left, fwd, up])
+        rig_face = chest_turn @ np.column_stack([left, fwd, up])
         target_rot[hb] = np.einsum('tab,bc->tac', rotations[:, j('Head')],
                                    soma_face @ rig_face.T @ rest[hb, :3, :3])
     elif head != 'carriage':
@@ -282,6 +293,7 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
 BLEND = 5        # frames to ease into and out of a plant
 RELATIVE_LIMB = {'Shoulder', 'Foot', 'ToeBase'}
 USE_HIP_DROP, USE_PELVIS_ROLL = True, True  # switches kept for diagnosis
+USE_CHEST_TURN = True
 ROOT_FULL_PLANTS_ONLY = False
 ROOT_SMOOTH = 0         # frames; smoothing the root correction smeared it into single support (knee snaps 15 deg)
 KEEP_LEG_LENGTH = True  # stance legs keep their transferred length (see the IK below)

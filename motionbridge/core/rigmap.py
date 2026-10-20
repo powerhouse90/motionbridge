@@ -198,7 +198,10 @@ def build(dump):
     m.roles['Spine'] = spine
     m.roles['Neck'] = post[:post.index(head)] if head in post else []
 
-    # Facing: toes point forward. Left = up x forward.
+    # Facing: square to the pelvis (the line between the thighs), with the toes saying which way is
+    # front. Toes alone are not enough: feet splay unevenly and yawed one rig's facing 4 degrees.
+    # The chest can be turned from this in a posed rest; retarget aims the arms by the shoulders.
+    # Left = up x forward.
     leg_chains, toe_dirs = [], []
     first = [rig.path(hips, f) for f in feet]
     shared = [n for n in first[0] if n in first[1]]
@@ -209,11 +212,15 @@ def build(dump):
         leg_chains.append(chain)
         end = chain[-1]
         toe_dirs.append(rig.tail[end] - rig.head[chain[-2] if len(chain) > 1 else end])
-    fwd = np.mean(toe_dirs, axis=0)
-    fwd[2] = 0
-    if np.linalg.norm(fwd) < 1e-4:
-        fwd = np.array([0., -1., 0.])
+    toes = np.mean(toe_dirs, axis=0)
+    toes[2] = 0
+    if np.linalg.norm(toes) < 1e-4:
+        toes = np.array([0., -1., 0.])
         m.notes.append('feet give no facing direction; assuming Blender front (-Y)')
+    across = rig.head[leg_chains[0][0]] - rig.head[leg_chains[1][0]]
+    across[2] = 0
+    fwd = np.cross(across, UP) if np.linalg.norm(across) > 1e-4 else toes
+    fwd *= 1 if np.dot(fwd, toes) >= 0 else -1
     fwd /= np.linalg.norm(fwd)
     left = np.cross(UP, fwd)
     m.forward, m.left = fwd.round(4).tolist(), left.round(4).tolist()
