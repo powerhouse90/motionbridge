@@ -118,10 +118,12 @@ def _pairs(roles, rig_head, soma_head):
                 continue
             following = {'Shoulder': 'Arm', 'Arm': 'ForeArm', 'ForeArm': 'Hand', 'Leg': 'Shin', 'Shin': 'Foot',
                          'Foot': 'ToeBase'}.get(role)
-            # Clavicles move relative to their own rest, like the spine: forcing them onto SOMA's
-            # clavicle (angled ~20 degrees back) swung rigs' shoulders 20-32 degrees off their skinning.
+            # Only the long limb bones are aligned to SOMA's rest (that is what reconciles T-pose vs
+            # A-pose and keeps knees/elbows tracking the source). Clavicles, feet and toes move
+            # relative to their own rest: forcing them onto SOMA's anatomy swung shoulders 20-32
+            # degrees off their skinning and tipped flat-built feet 11-16 degrees into the floor.
             out.append((roles[side + role], side + j, side + k, roles.get(side + following) if following else None,
-                        role != 'Shoulder'))
+                        role not in RELATIVE_LIMB))
         if side + 'Hand' in roles:
             middle = roles.get(side + 'HandMiddle')
             out.append((roles[side + 'Hand'], side + 'Hand', side + 'HandMiddle1', middle[0] if middle else None,
@@ -249,9 +251,11 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
                 pose_[:, i, :3, 3] = root_
         return pose_
 
+    lengths = np.array([np.linalg.norm(np.array(b['tail']) - np.array(b['head'])) for b in bones])
+    lengths /= np.linalg.norm(obj[:3, :3], axis=0).mean()  # world length -> armature units
     locks = contacts.detect(motion) if feet_ik else None
     if feet_ik:
-        root, notes = _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd)
+        root, notes = _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd, lengths)
     pose = fk(target_rot, root)
 
     # Local pose (Blender basis): rest_local^-1 @ parent_pose^-1 @ pose.
@@ -268,8 +272,6 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
         flip = np.einsum('bi,bi->b', quats[t], quats[t - 1]) < 0
         quats[t, flip] *= -1
 
-    lengths = np.array([np.linalg.norm(np.array(b['tail']) - np.array(b['head'])) for b in bones])
-    lengths /= np.linalg.norm(obj[:3, :3], axis=0).mean()  # world length -> armature units
     heads_arm = pose[..., :3, 3]
     tails_arm = heads_arm + pose[..., :3, 1] * lengths[None, :, None]
     to_world = lambda x: x @ obj[:3, :3].T + obj[:3, 3]
@@ -278,6 +280,7 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
 
 
 BLEND = 5        # frames to ease into and out of a plant
+RELATIVE_LIMB = {'Shoulder', 'Foot', 'ToeBase'}
 MAX_ROLL = np.radians(12)  # pelvis roll limit for planting both feet
 REACH = 0.9999   # essentially full length; 0.995 forced ~11 degrees of knee bend on straight legs
 
@@ -301,7 +304,7 @@ def _runs(labels, value):
     return out
 
 
-def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd, drive_root=True):
+def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd, lengths, drive_root=True):
     """Pin planted feet to the floor: per-span targets, hips lowered only when a leg can't reach,
     then analytic two-bone IK on thigh and shin. Foot rotations stay as transferred.
 
@@ -396,7 +399,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             shift = np.stack([np.convolve(np.pad(shift[:, i], BLEND, mode='edge'), np.ones(k) / k, mode='valid')
                               for i in range(3)], axis=1)
             root2, more = _plant_feet(fk, target_rot, root + shift, rest, parent, index, roles, locks, up, fwd,
-                                      drive_root=False)
+                                      lengths, drive_root=False)
             return root2, [f'root follows planted feet (up to {np.linalg.norm(shift, axis=1).max() * 100:.1f} cm)'] + more
 
     def needs():
@@ -477,4 +480,46 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         thigh[frames] = np.einsum('tab,tbc->tac', _swing_batch(K - H, knee - H), thigh[frames])
         shin[frames] = np.einsum('tab,tbc->tac', _swing_batch(A - K, ankle_new - knee), shin[frames])
         target_rot[l], target_rot[s] = thigh, shin
+
+    # Soles never go through the floor while a foot is (easing into being) planted. Source foot pitch
+    # is noisy, and a few degrees toes-down drives the front of a long foot under the floor. Only lift:
+    # heel strikes with toes up and toe-offs keep the performance.
+    pose = fk(target_rot, root)
+    lifted = 0.0
+    for side in goals:
+        l, s, f, a, b = legs[side]
+        key = side + 'ToeBase'
+        if key not in roles:
+            continue
+        toe = index[roles[key]]
+        if toe not in target_rot or f not in target_rot:
+            continue
+        weight = legs_weight[side]
+        for pivot, bone, moved in ((f, f, [f, toe]), (toe, toe, [toe])):
+            # joint that must stay above its rest height: the toe joint for the foot, the toe tip for the toe
+            pose = fk(target_rot, root)
+            if bone == f:
+                point, floor_h = pose[:, toe, :3, 3], rest[toe, :3, 3] @ up
+            else:
+                tip_local = np.linalg.inv(rest[toe]) @ np.r_[rest[toe, :3, 3] + rest[toe, :3, 1] * lengths[toe], 1]
+                point = (pose[:, toe] @ tip_local)[:, :3]
+                floor_h = (rest[toe] @ tip_local)[:3] @ up
+            for t in np.flatnonzero(weight > 0):
+                deficit = floor_h - point[t] @ up
+                if deficit <= 1e-4:
+                    continue
+                arm = point[t] - pose[t, pivot, :3, 3]
+                axis = np.cross(arm, up)
+                if np.linalg.norm(axis) < 1e-9:
+                    continue
+                axis /= np.linalg.norm(axis)
+                horizontal = np.linalg.norm(arm - up * (arm @ up))
+                angle = weight[t] * np.arctan2(deficit, max(horizontal, 1e-6))
+                r = Rotation.from_rotvec(axis * angle).as_matrix()  # rotates the point upward
+                for k in moved:
+                    target_rot[k] = target_rot[k].copy()
+                    target_rot[k][t] = r @ target_rot[k][t]
+                lifted = max(lifted, deficit)
+    if lifted > 0:
+        notes.append(f'soles lifted up to {lifted * 100:.1f} cm out of the floor')
     return root, notes
