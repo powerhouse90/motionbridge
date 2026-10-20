@@ -40,3 +40,9 @@ name = "fingers"
 layout = "front + 3/4 + hands"
 action = "Standing still with both hands raised in front of her chest, she counts from one to five on her right hand, raising one finger at a time, then opens and closes both hands into fists twice."
 why = "Finger articulation for the finger chains and the hand close-up panel"
+
+[[takes]]
+name = "walk_diagonal"
+layout = "front + 3/4"
+action = "She walks naturally diagonally across the frame from the back left to the front right: four relaxed steps with an upright posture, head level and eyes looking ahead in her walking direction, clear heel strikes, straight stance legs, toe-offs and alternating arm swing, then stops with both feet planted. Her whole body stays inside each panel."
+why = "Walk seen at an angle: knee bend and head pitch are visible to single-view reconstruction, unlike walking straight at the camera"

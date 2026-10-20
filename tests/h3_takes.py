@@ -3,6 +3,7 @@
 python -m tests.h3_takes queue     submit every take that has no receipt yet
 python -m tests.h3_takes collect   for finished takes: copy video, split panels, GEM, import to golden/motions
 python -m tests.h3_takes status    show where each take is
+python -m tests.h3_takes reimport  rebuild golden H3 motions from existing extractions
 """
 import argparse
 import json
@@ -14,10 +15,15 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from motionbridge import config as configuration
-from motionbridge.core import soma
+import torch
+
+from motionbridge.core import head_pose, soma
 from motionbridge.gem.extract import extract
 
 ROOT = configuration.ROOT
+# Off: fitting GEM's head to ViTPose face points tilted heads further DOWN on the mesh (checked on
+# the walk against the H3 frame). Kept for a later, face-model-based head pose.
+HEAD_POSE = False
 PANELS = {'front + 3/4': ['front', 'threequarter'], 'front + 3/4 + hands': ['front', 'threequarter', 'hands']}
 
 
@@ -123,9 +129,27 @@ def collect(config):
             motion_file = extract(panel, out / view / 'extraction', config['paths']['gem_root'],
                                   config['paths']['gem_python'])
             print(f"{take['name']}/{view}: GEM done in {time.time() - started:.0f} s")
-        motion = soma.from_gem_export(out / 'front' / 'extraction' / 'motion_export.npz', 24)
-        motion.save(ROOT / 'golden' / 'motions' / f"h3_{take['name']}.npz")
-        print(f"{take['name']}: imported golden/motions/h3_{take['name']}.npz")
+        import_take(config, take)
+
+
+def import_take(config, take):
+    """Front-panel GEM motion -> golden motion, with the head pitch corrected against the 2D face."""
+    extraction = folder(config, take) / 'front' / 'extraction'
+    motion = soma.from_gem_export(extraction / 'motion_export.npz', 24)
+    if HEAD_POSE:
+        keypoints = torch.load(extraction / 'capture' / 'preprocess' / 'vitpose.pt').numpy()
+        motion, report = head_pose.refine(motion, extraction / 'motion_export.npz', keypoints)
+        (folder(config, take) / 'head_pose.json').write_text(json.dumps(report, indent=1))
+    motion.save(ROOT / 'golden' / 'motions' / f"h3_{take['name']}.npz")
+    print(f"{take['name']}: imported golden/motions/h3_{take['name']}.npz")
+
+
+def reimport(config):
+    """Rebuild every golden H3 motion from its existing extraction (no GPU)."""
+    _, all_takes = takes()
+    for take in all_takes:
+        if (folder(config, take) / 'front' / 'extraction' / 'motion_export.npz').exists():
+            import_take(config, take)
 
 
 def status(config):
@@ -140,14 +164,14 @@ def status(config):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('command', choices=['queue', 'collect', 'status'])
+    p.add_argument('command', choices=['queue', 'collect', 'status', 'reimport'])
     p.add_argument('--only', nargs='*', help='take names (queue only)')
     a = p.parse_args()
     config = configuration.load()
     if a.command == 'queue':
         queue(config, a.only)
     else:
-        {'collect': collect, 'status': status}[a.command](config)
+        {'collect': collect, 'status': status, 'reimport': reimport}[a.command](config)
 
 
 if __name__ == '__main__':
