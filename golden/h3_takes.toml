@@ -1,0 +1,42 @@
+# H3 takes generated for the golden set. Each fills workflows/h3_dual_view_api.json.
+# The performer is the calibrated punk female rendered from her rest BLEND; the
+# motion is what matters, so one performer is enough. Retargets go to every rig.
+
+[defaults]
+asset_file = "C:/Users/Razgriz/Documents/Github/lil horror/midnight_rinse_R2/characters/punk_couple/female_v2/torso_balance/relaxed_idle_retarget.blend"
+unet_name = "h3ErosMax_beta5_fp8.safetensors"   # test clips only; publish with official H3 weights
+frames = 73
+seed = 21092631
+two_view_intro = "Animate this split-screen reference as two synchronized fixed-camera views of the SAME woman performing the SAME action at the SAME time. Left panel is a front view; right panel is a three-quarter view. Preserve both camera angles and the central divider throughout."
+three_view_intro = "Animate this three-panel reference as three synchronized fixed-camera views of the SAME woman performing the SAME action at the SAME time. Left panel is a front full-body view, middle panel is a three-quarter full-body view, right panel is a close-up of her hands. Preserve all three camera framings and dividers throughout."
+outro = "Realistic planted soles, heel lifts and weight transfer, natural boot shape and stable limb anatomy. All panels show the same instant of the same motion. Full body, hair, hands and entire boots remain visible with margin throughout. Preserve her identity, proportions, jacket, shirt, jeans, boots, neutral background and lighting. No camera movement, cuts, spins, extra limbs, props, or changes to the panel layout."
+
+[[takes]]
+name = "walk"
+layout = "front + 3/4"
+action = "She walks naturally toward the front camera: four relaxed steps starting with her anatomical right foot, with clear heel strikes, toe-offs and alternating arm swing, then stops with both feet planted. Keep her facing direction constant and her whole body inside each panel."
+why = "Footfalls and forward travel: root scaling by leg length"
+
+[[takes]]
+name = "crouch"
+layout = "front + 3/4"
+action = "She lowers into a deep squat with heels staying on the floor and knees bending strongly, arms reaching forward for balance, holds the bottom briefly, then pushes back up to standing."
+why = "Large hip-height change and deep knee bend"
+
+[[takes]]
+name = "floor_touch"
+layout = "front + 3/4"
+action = "She bends her knees and hips to reach down and press both palms flat on the floor in front of her feet, holds for a moment, then stands back up."
+why = "Hand-to-floor contact across arm lengths"
+
+[[takes]]
+name = "jump"
+layout = "front + 3/4"
+action = "She bends her knees, swings her arms and does one small vertical jump straight up on the spot with both feet leaving the floor, then lands softly with bent knees and settles to standing."
+why = "Airborne phase: contacts release and re-plant"
+
+[[takes]]
+name = "fingers"
+layout = "front + 3/4 + hands"
+action = "Standing still with both hands raised in front of her chest, she counts from one to five on her right hand, raising one finger at a time, then opens and closes both hands into fists twice."
+why = "Finger articulation for the finger chains and the hand close-up panel"

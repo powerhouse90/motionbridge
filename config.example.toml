@@ -3,6 +3,10 @@
 [paths]
 blender = "C:/Program Files/Blender Foundation/Blender 5.0/blender.exe"
 runs = "runs"   # generated output, relative to the repository root
+gem_root = "C:/tools/gem-x"                         # GEM-X checkout with its downloaded weights
+gem_python = "C:/tools/gem-x/.venv/Scripts/python.exe"
+comfy_url = "http://127.0.0.1:8188"
+comfy_output = "C:/ComfyUI/output"                  # where SaveVideo writes
 
 # Golden-set rigs. Characters you can't redistribute stay local: list them here,
 # not in git. `file` may be .blend, .fbx, .glb or .gltf.
