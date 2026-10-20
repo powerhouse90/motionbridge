@@ -52,7 +52,9 @@ def main():
     p.add_argument('--actions', nargs='+', required=True)
     p.add_argument('--outdir', required=True)
     p.add_argument('--size', nargs=2, type=int, default=[360, 480])
-    p.add_argument('--view', choices=['front34', 'side'], default='front34')
+    p.add_argument('--view', choices=['front34', 'side', 'profile'], default='front34')
+    p.add_argument('--hips-pair', nargs=2, metavar=('LEFT_THIGH', 'RIGHT_THIGH'),
+                   help='profile view: thigh bones that give the body left-right axis each frame')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     outdir = Path(a.outdir).resolve()
     bpy.ops.wm.open_mainfile(filepath=str(Path(a.blend).resolve()))
@@ -108,10 +110,27 @@ def main():
         fov = 2 * math.atan(36 / 2 / cam_data.lens) * min(1, a.size[0] / a.size[1])
         cam.location = centre + direction * radius / math.sin(fov / 2) * 1.05
         cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
-        target = outdir / (action if a.view == 'front34' else action + '_side')
+        target = outdir / (action if a.view == 'front34' else action + '_' + a.view)
         target.mkdir(parents=True, exist_ok=True)
-        scene.render.filepath = str(target) + '/'
-        bpy.ops.render.render(animation=True)
+        if a.view != 'profile':
+            scene.render.filepath = str(target) + '/'
+            bpy.ops.render.render(animation=True)
+        else:
+            # True profile every frame: camera on the character's right side, level, following the hips.
+            distance = radius / math.sin(fov / 2) * 1.05
+            for f in range(start, end + 1):
+                scene.frame_set(f)
+                l_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[0]].head
+                r_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[1]].head
+                side = (r_thigh - l_thigh)
+                side.z = 0
+                side.normalize()
+                pelvis = (l_thigh + r_thigh) / 2
+                aim = Vector((pelvis.x, pelvis.y, centre.z))
+                cam.location = aim + side * distance
+                cam.rotation_euler = (-side).to_track_quat('-Z', 'Y').to_euler()
+                scene.render.filepath = str(target / f'{f:04d}.png')
+                bpy.ops.render.render(write_still=True)
         print(f'render_mesh_video: {action} frames {start}-{end} -> {target}', flush=True)
 
 
