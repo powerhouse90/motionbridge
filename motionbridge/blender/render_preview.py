@@ -1,6 +1,6 @@
-"""Render baked actions on the textured character over a checker floor (Eevee). Test tooling.
+"""Render baked actions on the textured character over a checker floor (Eevee). Also the preview on the Export node.
 
-blender -b --python-exit-code 1 --python tests/render_mesh_video.py -- --blend BAKED.blend
+blender -b --python-exit-code 1 --python motionbridge/blender/render_preview.py -- --blend BAKED.blend
         --actions h3_walk h3_walk_noik --outdir DIR [--size 360 480]
 
 Writes DIR/<action>/0001.png ... One fixed camera per action, framed on the whole clip,
@@ -135,7 +135,7 @@ def main():
                 cam.rotation_euler = (-look).to_track_quat('-Z', 'Y').to_euler()
                 scene.render.filepath = str(target / f'{f:04d}.png')
                 bpy.ops.render.render(write_still=True)
-        print(f'render_mesh_video: {action} frames {start}-{end} -> {target}', flush=True)
+        print(f'render_preview: {action} frames {start}-{end} -> {target}', flush=True)
 
 
 main()

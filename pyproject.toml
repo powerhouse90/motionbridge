@@ -1,0 +1,15 @@
+[project]
+name = "motionbridge"
+version = "0.1.0"
+description = "Type an action, get it on your own rigged character: MiniMax H3 video -> NVIDIA GEM motion -> any humanoid rig, on an 8 GB GPU."
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10"
+# Runs in ComfyUI's Python with what ComfyUI already ships (numpy, scipy, torch, av, Pillow).
+# GEM runs in its own environment, which the MotionBridge Setup node builds.
+dependencies = ["numpy", "scipy"]
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "MotionBridge"
+Icon = ""

@@ -168,7 +168,7 @@ def meshvideo_report(config, motions=None):
     """Textured characters, before vs after foot IK, next to the H3 source video. What to judge results on."""
     runs = Path(config['paths']['runs'])
     out = runs / 'golden' / 'meshvideo'
-    script = ROOT / 'tests' / 'render_mesh_video.py'
+    script = ROOT / 'motionbridge' / 'blender' / 'render_preview.py'
     motions = motions or MESH_MOTIONS
     actions = [x for m in motions for x in (m, m + '_noik')]
     for rig in config['rigs']:
@@ -236,7 +236,7 @@ def compare_report(config, motions):
             for rig in rigs:
                 roles = rigmap.build(json.loads((runs / 'golden' / 'rigs' / f"{rig['name']}.json").read_text())).roles
                 done = subprocess.run([blender, '-b', '--python-exit-code', '1', '--python',
-                                       str(ROOT / 'tests' / 'render_mesh_video.py'), '--', '--blend',
+                                       str(ROOT / 'motionbridge' / 'blender' / 'render_preview.py'), '--', '--blend',
                                        str(runs / 'golden' / 'bake' / f"{rig['name']}.blend"), '--actions', motion,
                                        '--outdir', str(out / rig['name']), '--view', view, '--size', *map(str, TILE),
                                        '--hips-pair', roles['LeftLeg'], roles['RightLeg'],

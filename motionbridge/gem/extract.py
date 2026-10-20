@@ -5,7 +5,9 @@ python -m motionbridge.gem.extract --video clip.mp4 --out DIR   (paths from conf
 import argparse
 import hashlib
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 from motionbridge import config as configuration
@@ -13,7 +15,9 @@ from motionbridge import config as configuration
 STAGES = ['detect', 'pose', 'features', 'motion', 'export']
 
 
-def extract(video, out, gem_root, gem_python, focal_scale=1.0):
+def extract(video, out, gem_root, gem_python, focal_scale=1.0, env=None, interrupted=None):
+    """Run GEM on video into out/, resuming finished stages. env: environment for the GEM process.
+    interrupted: called while a stage runs; raise from it to cancel (the stage process is killed)."""
     video, out = Path(video).resolve(), Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(video.read_bytes()).hexdigest()
@@ -30,9 +34,20 @@ def extract(video, out, gem_root, gem_python, focal_scale=1.0):
             continue
         print('GEM stage', stage, flush=True)
         with (out / f'{stage}.log').open('w') as log:
-            result = subprocess.run([gem_python, str(backend), '--gem-root', gem_root, '--video', str(video),
-                                     '--out', str(out), '--stage', stage, '--focal-scale', str(focal_scale)], stdout=log, stderr=subprocess.STDOUT)
-        if result.returncode:
+            process = subprocess.Popen([str(gem_python), str(backend), '--gem-root', str(gem_root), '--video', str(video),
+                                        '--out', str(out), '--stage', stage, '--focal-scale', str(focal_scale)],
+                                       stdout=log, stderr=subprocess.STDOUT, env=env,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            try:
+                while process.poll() is None:
+                    if interrupted:
+                        interrupted()
+                    time.sleep(0.2)
+            except BaseException:
+                process.kill()
+                process.wait()
+                raise
+        if process.returncode:
             raise RuntimeError(f'GEM stage {stage} failed:\n' + (out / f'{stage}.log').read_text()[-2000:])
         done.write_text('complete\n')
     return out / 'motion_export.npz'

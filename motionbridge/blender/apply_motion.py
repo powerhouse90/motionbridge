@@ -1,7 +1,7 @@
 """Key retarget results onto a character and verify them. Never saves over the source.
 
 blender -b --python-exit-code 1 --python apply_motion.py -- --file CHAR --out OUT.blend
-        --motions a.npz [b.npz ...] [--armature NAME] [--fbx OUT.fbx] [--report report.json]
+        --motions a.npz [b.npz ...] [--armature NAME] [--fbx OUT.fbx] [--glb OUT.glb] [--report report.json]
 
 Each .npz (core.retarget.Result.save) becomes one action named after the file. After keying,
 every bone head is read back from Blender and compared with the core's forward kinematics.
@@ -15,7 +15,7 @@ import bpy
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scene import load, pick_armature  # noqa: E402
+from scene import load, pick_armature, skins  # noqa: E402
 
 CHECK_FRAMES = 8  # frames compared per action, spread over the clip
 
@@ -60,6 +60,7 @@ def main():
     p.add_argument('--motions', nargs='+', required=True)
     p.add_argument('--armature')
     p.add_argument('--fbx')
+    p.add_argument('--glb')
     p.add_argument('--report')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     source = Path(a.file).resolve()
@@ -84,16 +85,20 @@ def main():
         np.allclose([list(r) for r in b.matrix_local], rest_before[b.name]) for b in rig.data.bones)
     out.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(out), copy=True)
-    if a.fbx:
+    if a.fbx or a.glb:
         bpy.ops.object.select_all(action='DESELECT')
         rig.select_set(True)
-        for child in rig.children_recursive:
-            if child.type == 'MESH':
-                child.select_set(True)
+        for mesh in bpy.context.scene.objects:
+            if mesh.type == 'MESH' and skins(mesh, rig):
+                mesh.select_set(True)
         bpy.context.view_layer.objects.active = rig
+    if a.fbx:
         bpy.ops.export_scene.fbx(filepath=str(Path(a.fbx).resolve()), use_selection=True, bake_anim=True,
                                  bake_anim_use_all_actions=True, bake_anim_use_nla_strips=False,
                                  add_leaf_bones=False)
+    if a.glb:
+        bpy.ops.export_scene.gltf(filepath=str(Path(a.glb).resolve()), export_format='GLB', use_selection=True,
+                                  export_animations=True, export_animation_mode='ACTIONS')
     if a.report:
         Path(a.report).write_text(json.dumps(report, indent=1))
     print('apply_motion: saved', out, flush=True)
