@@ -281,6 +281,10 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
 
 BLEND = 5        # frames to ease into and out of a plant
 RELATIVE_LIMB = {'Shoulder', 'Foot', 'ToeBase'}
+USE_HIP_DROP, USE_PELVIS_ROLL = True, True  # switches kept for diagnosis
+ROOT_FULL_PLANTS_ONLY = False
+ROOT_SMOOTH = 0         # frames; smoothing the root correction smeared it into single support (knee snaps 15 deg)
+KEEP_LEG_LENGTH = True  # stance legs keep their transferred length (see the IK below)
 MAX_ROLL = np.radians(12)  # pelvis roll limit for planting both feet
 REACH = 0.9999   # essentially full length; 0.995 forced ~11 degrees of knee bend on straight legs
 
@@ -316,7 +320,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
     pose = fk(target_rot, root)
     T = len(root)
     flat = lambda v: v - np.outer(v @ up, up)
-    goals, legs, legs_weight = {}, {}, {}
+    goals, legs, legs_weight, target_full = {}, {}, {}, {}
     for side in ('Left', 'Right'):
         if not all(side + r in roles for r in ('Leg', 'Shin', 'Foot')):
             continue
@@ -378,6 +382,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         thigh_len = np.linalg.norm(rest[s, :3, 3] - rest[l, :3, 3])
         shin_len = np.linalg.norm(rest[f, :3, 3] - rest[s, :3, 3])
         goals[side], legs[side] = (goal, mask), (l, s, f, thigh_len, shin_len)
+        target_full[side] = np.where(np.isnan(target), ankle, target)
         legs_weight[side] = weight
 
     if drive_root and goals:
@@ -387,7 +392,12 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         for side, (goal, mask) in goals.items():
             l, s_, f, *_ = legs[side]
             w = legs_weight[side]
-            num += w[:, None] * (goal - pose_[:, f, :3, 3])  # all three axes: height too
+            if ROOT_FULL_PLANTS_ONLY:  # an easing (swinging) foot does not drag the body
+                w = (w >= 0.999).astype(float)
+                err = target_full[side] - pose_[:, f, :3, 3]
+            else:
+                err = goal - pose_[:, f, :3, 3]
+            num += w[:, None] * err  # all three axes: height too
             den += w
         known = den > 1e-6
         if known.any():
@@ -395,8 +405,8 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             shift[known] = num[known] / den[known, None]
             for axis in range(3):  # carry the correction smoothly through airborne frames
                 shift[~known, axis] = np.interp(np.flatnonzero(~known), np.flatnonzero(known), shift[known, axis])
-            k = 2 * BLEND + 1
-            shift = np.stack([np.convolve(np.pad(shift[:, i], BLEND, mode='edge'), np.ones(k) / k, mode='valid')
+            k = 2 * ROOT_SMOOTH + 1
+            shift = np.stack([np.convolve(np.pad(shift[:, i], ROOT_SMOOTH, mode='edge'), np.ones(k) / k, mode='valid')
                               for i in range(3)], axis=1)
             root2, more = _plant_feet(fk, target_rot, root + shift, rest, parent, index, roles, locks, up, fwd,
                                       lengths, drive_root=False)
@@ -419,7 +429,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
     # whole body and buckling the other knee. The spine keeps its own world rotation, so the torso
     # does not tilt with it.
     hips = index[roles['Hips']]
-    if len(goals) == 2 and hips in target_rot:
+    if USE_PELVIS_ROLL and len(goals) == 2 and hips in target_rot:
         n = needs()
         both = np.minimum(legs_weight['Left'], legs_weight['Right'])
         hip_w = np.linalg.norm(pose[:, legs['Left'][0], :3, 3] - pose[:, legs['Right'][0], :3, 3], axis=1)
@@ -446,7 +456,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         reach = REACH * (a + b)
         need = np.where(h < reach, -np.sqrt(np.maximum(reach ** 2 - h ** 2, 0)) - z, 0)
         drop = np.maximum(drop, np.where(mask, need, 0))
-    if drop.max() > 0:
+    if USE_HIP_DROP and drop.max() > 0:
         k = 2 * BLEND + 1
         drop = np.array([drop[max(0, t - BLEND):t + BLEND + 1].max() for t in range(T)])  # cover neighbours
         drop = np.convolve(np.pad(drop, BLEND, mode='edge'), np.ones(k) / k, mode='valid')
@@ -467,6 +477,16 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         G = goal[frames]
         v = G - H
         dist = np.clip(np.linalg.norm(v, axis=1), abs(a - b) + 1e-4, REACH * (a + b))
+        if KEEP_LEG_LENGTH:
+            # Near full extension a few mm of hip-ankle distance is several degrees of knee bend, so the
+            # leg keeps its transferred length and is only re-aimed at the pin: the knee angle stays the
+            # performer's and the foot lands within a few mm of its pin.
+            keep = np.linalg.norm(A - H, axis=1)
+            # ...except where that would put the planted ankle below the floor: bend just enough.
+            floor_h = rest[f, :3, 3] @ up
+            dz = (v / np.linalg.norm(v, axis=1, keepdims=True)) @ up
+            limit = np.where(dz < -1e-6, (floor_h - H @ up) / np.minimum(dz, -1e-6), np.inf)
+            dist = np.clip(np.minimum(keep, limit), abs(a - b) + 1e-4, REACH * (a + b))
         n = v / np.linalg.norm(v, axis=1, keepdims=True)
         bend = (K - H) - np.einsum('ti,ti->t', K - H, n)[:, None] * n
         weak = np.linalg.norm(bend, axis=1) < 1e-4 * (a + b)
