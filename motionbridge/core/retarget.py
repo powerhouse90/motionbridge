@@ -6,7 +6,9 @@ For every mapped bone b following SOMA joint j:
 
 delta_j is SOMA's world-space rotation away from its rest pose, expressed in the
 rig's frame. align_b is a swing that turns the rig's rest bone onto SOMA's rest
-segment, so a T-pose rig follows an A-pose source (and the reverse). Unmapped
+segment, so a T-pose rig follows an A-pose source (and the reverse). That is for
+limbs only: hips, spine, neck and head use align_b = I, moving by SOMA's change
+from its own rest, because each rig's rest trunk and neck are its neutral. Unmapped
 bones (twist helpers, pelvis aux, extras) keep their rest pose relative to their
 parent. Forward kinematics then rebuilds positions from the rig's own offsets,
 and root travel is scaled by the hip-to-ankle length ratio.
@@ -71,16 +73,26 @@ def _orthonormal(m):
     return u @ vt
 
 
-def _pairs(roles):
-    """[(bone, soma joint, soma child joint, next rig bone or None, align?)]"""
+def _pairs(roles, rig_head, soma_head):
+    """[(bone, soma joint, soma child joint, next rig bone or None, align?)]
+
+    rig_head / soma_head give rest positions by bone / joint name. Spine and neck bones are
+    matched by where their midpoint falls along the chain's length, not by count: SOMA's chest
+    segment is long and carries most of the bend, so a rig's long middle spine bone must follow it.
+    """
     out = []
 
     def chain(bones, joints, end, after):
-        n, m = len(bones), len(joints)
+        ends = [rig_head[b] for b in bones] + [rig_head[after]]
+        rig_cum = np.r_[0, np.cumsum(np.linalg.norm(np.diff(ends, axis=0), axis=1))]
+        marks = [soma_head[x] for x in joints + [end]]
+        soma_cum = np.r_[0, np.cumsum(np.linalg.norm(np.diff(marks, axis=0), axis=1))]
         for i, b in enumerate(bones):
-            j = joints[min(m - 1, round(i * (m - 1) / max(n - 1, 1)))] if n > 1 else joints[0]
-            k = (joints + [end])[joints.index(j) + 1]
-            out.append((b, j, k, bones[i + 1] if i + 1 < n else after, True))
+            middle = (rig_cum[i] + rig_cum[i + 1]) / 2 / max(rig_cum[-1], 1e-9) * soma_cum[-1]
+            k = min(int(np.searchsorted(soma_cum, middle, side='right')) - 1, len(joints) - 1)
+            j = joints[max(k, 0)]
+            out.append((b, j, (joints + [end])[joints.index(j) + 1], bones[i + 1] if i + 1 < len(bones) else after,
+                        False))
 
     spine, neck = roles.get('Spine', []), roles.get('Neck', [])
     out.append((roles['Hips'], 'Hips', 'Spine1', (spine or neck or [roles['Head']])[0], False))
@@ -88,7 +100,10 @@ def _pairs(roles):
         chain(spine, SPINE, 'Neck1', (neck or [roles['Head']])[0])
     if neck:
         chain(neck, NECK, 'Head', roles['Head'])
-    out.append((roles['Head'], 'Head', 'HeadEnd', None, True))
+    # Trunk, neck and head transfer SOMA's change from rest, not its absolute direction: each rig's
+    # rest posture there is its own neutral (SOMA's anatomical neck already slants 17 degrees forward;
+    # copying that onto a rig with an upright rest neck juts the head out).
+    out.append((roles['Head'], 'Head', 'HeadEnd', None, False))
     for side in ('Left', 'Right'):
         for role, j, k in LIMB:
             if side + role not in roles:
@@ -168,7 +183,8 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True):
     soma_rest = r @ convert.T
     soma_pos = world[..., :3, 3] @ convert.T
 
-    pairs = _pairs(rigmap.roles)
+    pairs = _pairs(rigmap.roles, {n: rest[index[n], :3, 3] for n in names},
+                   {n: soma_rest[j(n)] for n in SPINE + NECK + ['Head']})
     target_rot = {}
     for bone, sj, sk, nxt, align in pairs:
         b = index[bone]

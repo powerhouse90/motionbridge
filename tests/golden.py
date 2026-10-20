@@ -152,7 +152,7 @@ def retarget_report(config):
 
 
 SOMA_UP_VEC = [0., 1., 0.]
-MESH_MOTIONS = ['h3_walk', 'h3_jump', 'h3_crouch']
+MESH_MOTIONS = ['h3_walk', 'h3_jump', 'h3_crouch', 'arthur_idle']
 
 
 def label(img, text):
@@ -180,16 +180,18 @@ def meshvideo_report(config, motions=None):
     for motion in motions:
         source = runs / 'h3' / motion.removeprefix('h3_') / 'front' / 'source.mp4'
         capture, src = cv2.VideoCapture(str(source)), []
-        while True:
+        while source.exists():
             ok, frame = capture.read()
             if not ok:
                 break
             src.append(cv2.resize(frame, (360, 480)))
+        length = len(list((out / config['rigs'][0]['name'] / motion).glob('*.png')))
+        src = src or [np.full((480, 360, 3), 30, np.uint8)] * length  # no H3 source for this clip
         rows = []
         for suffix, title in (('_noik', 'no IK'), ('', 'foot IK')):
             frames = []
             for t in range(len(src)):
-                tiles = [label(src[t].copy(), 'H3 source')]
+                tiles = [label(src[t].copy(), 'H3 source' if source.exists() else 'no source video')]
                 for rig in config['rigs']:
                     png = out / rig['name'] / (motion + suffix) / f'{t + 1:04d}.png'
                     tiles.append(label(cv2.imread(str(png)), f"{rig['name']} - {title}"))

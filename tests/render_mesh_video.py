@@ -52,6 +52,7 @@ def main():
     p.add_argument('--actions', nargs='+', required=True)
     p.add_argument('--outdir', required=True)
     p.add_argument('--size', nargs=2, type=int, default=[360, 480])
+    p.add_argument('--view', choices=['front34', 'side'], default='front34')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     outdir = Path(a.outdir).resolve()
     bpy.ops.wm.open_mainfile(filepath=str(Path(a.blend).resolve()))
@@ -100,13 +101,14 @@ def main():
         lo.z = floor_z
         centre = (lo + hi) / 2
         radius = (hi - lo).length / 2
-        # Front three-quarter, 15 degrees above. The rigs here face -Y.
-        direction = Vector((math.sin(math.radians(30)), -math.cos(math.radians(30)), math.tan(math.radians(15))))
+        # Front three-quarter, 15 degrees above (or a level profile). The rigs here face -Y.
+        yaw, pitch = (30, 15) if a.view == 'front34' else (90, 0)
+        direction = Vector((math.sin(math.radians(yaw)), -math.cos(math.radians(yaw)), math.tan(math.radians(pitch))))
         direction.normalize()
         fov = 2 * math.atan(36 / 2 / cam_data.lens) * min(1, a.size[0] / a.size[1])
         cam.location = centre + direction * radius / math.sin(fov / 2) * 1.05
         cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
-        target = outdir / action
+        target = outdir / (action if a.view == 'front34' else action + '_side')
         target.mkdir(parents=True, exist_ok=True)
         scene.render.filepath = str(target) + '/'
         bpy.ops.render.render(animation=True)
