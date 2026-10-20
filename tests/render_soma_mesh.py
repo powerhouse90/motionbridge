@@ -87,15 +87,16 @@ def render(frames_file, outdir, view):
     for t in range(len(verts)):
         mesh.vertices.foreach_set('co', verts[t].ravel())
         mesh.update()
-        if view == 'profile':  # same tracking camera as render_mesh_video: level, at the body's right side
+        if view in ('profile', 'front'):  # same tracking camera as render_mesh_video, level
             l_hip, r_hip = Vector(data['hips'][t, 0].tolist()), Vector(data['hips'][t, 1].tolist())
             side = r_hip - l_hip
             side.z = 0
             side.normalize()
             pelvis = (l_hip + r_hip) / 2
             aim = Vector((pelvis.x, pelvis.y, centre.z))
-            cam.location = aim + side * distance
-            cam.rotation_euler = (-side).to_track_quat('-Z', 'Y').to_euler()
+            look = side if view == 'profile' else Vector((0, 0, 1)).cross(side)  # front: up x right = forward
+            cam.location = aim + look * distance
+            cam.rotation_euler = (-look).to_track_quat('-Z', 'Y').to_euler()
         scene.render.filepath = str(Path(outdir) / f'{t + 1:04d}.png')
         bpy.ops.render.render(write_still=True)
 

@@ -52,7 +52,7 @@ def main():
     p.add_argument('--actions', nargs='+', required=True)
     p.add_argument('--outdir', required=True)
     p.add_argument('--size', nargs=2, type=int, default=[360, 480])
-    p.add_argument('--view', choices=['front34', 'side', 'profile'], default='front34')
+    p.add_argument('--view', choices=['front34', 'side', 'profile', 'front'], default='front34')
     p.add_argument('--hips-pair', nargs=2, metavar=('LEFT_THIGH', 'RIGHT_THIGH'),
                    help='profile view: thigh bones that give the body left-right axis each frame')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
@@ -112,11 +112,11 @@ def main():
         cam.rotation_euler = (-direction).to_track_quat('-Z', 'Y').to_euler()
         target = outdir / (action if a.view == 'front34' else action + '_' + a.view)
         target.mkdir(parents=True, exist_ok=True)
-        if a.view != 'profile':
+        if a.view not in ('profile', 'front'):
             scene.render.filepath = str(target) + '/'
             bpy.ops.render.render(animation=True)
         else:
-            # True profile every frame: camera on the character's right side, level, following the hips.
+            # Tracking camera every frame, level, following the hips: at the right side (profile) or in front.
             distance = radius / math.sin(fov / 2) * 1.05
             for f in range(start, end + 1):
                 scene.frame_set(f)
@@ -127,8 +127,9 @@ def main():
                 side.normalize()
                 pelvis = (l_thigh + r_thigh) / 2
                 aim = Vector((pelvis.x, pelvis.y, centre.z))
-                cam.location = aim + side * distance
-                cam.rotation_euler = (-side).to_track_quat('-Z', 'Y').to_euler()
+                look = side if a.view == 'profile' else Vector((0, 0, 1)).cross(side)  # front: up x right = forward
+                cam.location = aim + look * distance
+                cam.rotation_euler = (-look).to_track_quat('-Z', 'Y').to_euler()
                 scene.render.filepath = str(target / f'{f:04d}.png')
                 bpy.ops.render.render(write_still=True)
         print(f'render_mesh_video: {action} frames {start}-{end} -> {target}', flush=True)
