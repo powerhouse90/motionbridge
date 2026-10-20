@@ -1,4 +1,6 @@
 """Draw skeletons as front and side views for contact sheets. Test tooling only."""
+import subprocess
+
 import cv2
 import numpy as np
 
@@ -107,10 +109,16 @@ def write_video(path, rows, fps):
     """rows: list of frame lists, stacked vertically; shorter clips hold their last frame."""
     length = max(len(r) for r in rows)
     first = np.vstack([r[0] for r in rows])
-    out = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (first.shape[1], first.shape[0]))
+    # H.264 through ffmpeg: OpenCV's mp4v output does not play in browsers or app previews.
+    h, w = first.shape[:2]
+    ffmpeg = subprocess.Popen(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt',
+                               'bgr24', '-s', f'{w}x{h}', '-r', str(fps), '-i', '-', '-c:v', 'libx264', '-pix_fmt',
+                               'yuv420p', '-crf', '20', str(path)], stdin=subprocess.PIPE)
     for t in range(length):
-        out.write(np.vstack([r[min(t, len(r) - 1)] for r in rows]))
-    out.release()
+        ffmpeg.stdin.write(np.ascontiguousarray(np.vstack([r[min(t, len(r) - 1)] for r in rows])).tobytes())
+    ffmpeg.stdin.close()
+    if ffmpeg.wait():
+        raise RuntimeError(f'ffmpeg failed writing {path}')
 
 
 def write_strip(path, rows, picks=5):
