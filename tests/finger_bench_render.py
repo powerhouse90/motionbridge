@@ -3,7 +3,7 @@ camera on it, render, and report Blender's own screen positions of the 21 hand p
 
 blender -b --disable-autoexec --python tests/finger_bench_render.py -- REQUEST.json
 REQUEST: {file, armature, bones: [names], basis: (T, B, 4, 4) npy path, keypoints: [[bone, head|tail]],
-          outdir, size: [w, h]}
+          outdir, size: [w, h], palm_normal, side, view ('fp' or 'side')}
 Constraints on the rig are muted (the benchmark keys every finger joint explicitly).
 """
 import json, math, sys
@@ -65,6 +65,10 @@ cam.data.lens, cam.data.sensor_width, cam.data.clip_start = 24, 36, L * 0.05
 scene.collection.objects.link(cam); scene.camera = cam
 cam.location = centre - d * 2.2 * L + back * 1.6 * L + inward * 0.6 * L
 cam.rotation_euler = (centre - cam.location).to_track_quat('-Z', 'Y').to_euler()
+if req.get('view') == 'side':  # a second view of the same moment: beside the hand on the thumb side,
+    # looking across the fingers so their curl is seen in profile; the arm runs away from this camera
+    cam.location = centre + inward * 2.6 * L + back * 0.5 * L - d * 0.4 * L
+    cam.rotation_euler = (centre - cam.location).to_track_quat('-Z', 'Y').to_euler()
 scene.render.engine = 'BLENDER_EEVEE'
 scene.eevee.taa_render_samples = 8
 scene.render.resolution_x, scene.render.resolution_y = req['size']

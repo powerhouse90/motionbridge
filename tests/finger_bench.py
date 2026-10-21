@@ -77,46 +77,57 @@ def main():
     bones = [hand.hand] + [n for j in hand.fingers.values() for n in j]
     basis = np.array([[model.basis(x)[sk.index[n]] for n in bones] for x in truth])
     np.save(out / 'truth_basis.npy', basis); np.save(out / 'truth_params.npy', truth)
-    frames = out / 'frames'
-    if not (frames / 'truth_uv.npy').exists():
-        req = {'file': str(Path(a.rig_file).resolve()), 'armature': a.armature or dump['armature'], 'bones': bones,
-               'basis': str(out / 'truth_basis.npy'), 'keypoints': hand.keypoint_bones(), 'outdir': str(frames),
-               'size': [960, 540], 'side': a.side, 'palm_normal': model.palm_normal.tolist()}
-        (out / 'request.json').write_text(json.dumps(req))
-        r = subprocess.run([paths['blender'], '-b', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1',
-                            '--python', str(ROOT / 'tests' / 'finger_bench_render.py'), '--', str(out / 'request.json')],
-                           capture_output=True, text=True)
-        if r.returncode:
-            raise SystemExit(r.stdout[-2000:] + r.stderr[-2000:])
-    camera = json.loads((frames / 'camera.json').read_text())
-    truth_uv = np.load(frames / 'truth_uv.npy')[..., :2]
-    ours = np.array([hand_fit.project(model.keypoints(x), camera) for x in truth[::12]])
-    print(f'{a.name}: our hand model vs Blender, max {np.abs(ours - truth_uv[::12]).max():.3f} px')
-    span = np.linalg.norm(truth_uv[0, 0] - truth_uv[0, 12])
-    # square crop around the hand, sized to its full span (a fist's outline is too tight for the detector)
-    centre = (truth_uv.min(1) + truth_uv.max(1)) / 2
-    half = 0.5 * np.maximum((truth_uv.max(1) - truth_uv.min(1)).max(1), span)[:, None] * 1.6
-    np.save(out / 'crops.npy', np.c_[centre - half, centre + half])
-    for kind, extra in (('whole', []), ('crop', [str(out / 'crops.npy')])):
-        target = out / f'track_{kind}.npz'
-        if not target.exists():
-            r = subprocess.run([str(MP_PYTHON), str(ROOT / 'tests' / 'hand_track_mp.py'), str(frames), str(MP_MODEL), str(target)] + extra,
+    views = ('fp', 'side')  # first-person view, and the same moment seen from beside the hand
+    data = {}
+    for view in views:
+        frames = out / ('frames' if view == 'fp' else f'frames_{view}')
+        if not (frames / 'truth_uv.npy').exists():
+            req = {'file': str(Path(a.rig_file).resolve()), 'armature': a.armature or dump['armature'], 'bones': bones,
+                   'basis': str(out / 'truth_basis.npy'), 'keypoints': hand.keypoint_bones(), 'outdir': str(frames),
+                   'size': [960, 540], 'side': a.side, 'palm_normal': model.palm_normal.tolist(), 'view': view}
+            (out / f'request_{view}.json').write_text(json.dumps(req))
+            r = subprocess.run([paths['blender'], '-b', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1',
+                                '--python', str(ROOT / 'tests' / 'finger_bench_render.py'), '--', str(out / f'request_{view}.json')],
                                capture_output=True, text=True)
-            print(f'  tracking ({kind}):', (r.stdout.strip().splitlines() or ['?'])[-1])
-    report = {'hand_span_px': float(span)}
-    for kind, anatomical in (('whole', False), ('crop', False), ('crop', True)):
-        obs = np.load(out / f'track_{kind}.npz')['points'][..., :2]
-        found = ~np.isnan(obs[:, 0, 0])
-        key_err = np.nanmedian(np.linalg.norm(obs[found] - truth_uv[found], axis=-1))
-        fitted, used = hand_fit.fit(model, obs, camera, anatomical=anatomical)
-        np.save(out / f'fit_{kind}_{"anat" if anatomical else "free"}.npy', fitted)
+            if r.returncode:
+                raise SystemExit(r.stdout[-2000:] + r.stderr[-2000:])
+        camera = json.loads((frames / 'camera.json').read_text())
+        truth_uv = np.load(frames / 'truth_uv.npy')[..., :2]
+        ours = np.array([hand_fit.project(model.keypoints(x), camera) for x in truth[::12]])
+        print(f'{a.name} [{view}]: our hand model vs Blender, max {np.abs(ours - truth_uv[::12]).max():.3f} px')
+        span = np.linalg.norm(truth_uv[0, 0] - truth_uv[0, 12])
+        # square crop around the hand, sized to its full span (a fist's outline is too tight for the detector)
+        centre = (truth_uv.min(1) + truth_uv.max(1)) / 2
+        half = 0.5 * np.maximum((truth_uv.max(1) - truth_uv.min(1)).max(1), span)[:, None] * 1.6
+        crops = out / f'crops_{view}.npy'
+        np.save(crops, np.c_[centre - half, centre + half])
+        for kind, extra in (('whole', []), ('crop', [str(crops)])):
+            target = out / (f'track_{kind}.npz' if view == 'fp' else f'track_{kind}_{view}.npz')
+            if not target.exists():
+                r = subprocess.run([str(MP_PYTHON), str(ROOT / 'tests' / 'hand_track_mp.py'), str(frames), str(MP_MODEL), str(target)] + extra,
+                                   capture_output=True, text=True)
+                print(f'  tracking ({view}, {kind}):', (r.stdout.strip().splitlines() or ['?'])[-1])
+        data[view] = {'camera': camera, 'truth_uv': truth_uv,
+                      'whole': np.load(out / (f'track_whole.npz' if view == 'fp' else f'track_whole_{view}.npz'))['points'][..., :2],
+                      'crop': np.load(out / (f'track_crop.npz' if view == 'fp' else f'track_crop_{view}.npz'))['points'][..., :2]}
+    report = {}
+    runs = [('fp', 'whole', False), ('fp', 'crop', False), ('fp', 'crop', True), ('side', 'crop', True), ('fp+side', 'crop', True)]
+    for which, kind, anatomical in runs:
+        vs = which.split('+')
+        obs = [data[v][kind] for v in vs]; cams = [data[v]['camera'] for v in vs]
+        key_err = np.mean([np.nanmedian(np.linalg.norm(o - data[v]['truth_uv'], axis=-1)) for o, v in zip(obs, vs)])
+        found = np.any([~np.isnan(o[:, 0, 0]) for o in obs], axis=0)
+        fitted, used = hand_fit.fit(model, obs if len(obs) > 1 else obs[0], cams if len(cams) > 1 else cams[0], anatomical=anatomical)
         e = bend_error(model, fitted, truth)
         jitter = float(np.degrees(np.abs(np.diff(fitted[:, 3:], 2, axis=0)).mean()))
-        label = f'{kind:5s} + {"anatomical" if anatomical else "free     "}'
+        label = f'{which:7s} {kind:5s} + {"anatomical" if anatomical else "free"}'
         report[label] = {'frames_tracked': int(found.sum()), 'keypoint_px': float(key_err), 'bend_error_deg': e,
                          'finger_jitter_deg': jitter}
-        print(f'  {label}: tracked {found.sum():2d}/{T}, keypoints {key_err:5.1f} px | bend error (deg) ' +
-              ' '.join(f'{k} {v:4.1f}' for k, v in e.items()) + f' | jitter {jitter:.2f}')
+        np.save(out / f'fit_{which}_{kind}_{"anat" if anatomical else "free"}.npy', fitted)
+        print(f'  {label:28s}: tracked {found.sum():2d}/{T}, keypoints {key_err:5.1f} px | bend error (deg) ' +
+              ' '.join(f'{k} {v:4.1f}' for k, v in e.items()) + f' | mean {np.mean(list(e.values())[:-1]):4.1f} | jitter {jitter:.2f}')
+    truth_jitter = float(np.degrees(np.abs(np.diff(truth[:, 3:], 2, axis=0)).mean()))
+    print(f'  (the test motion itself has jitter {truth_jitter:.2f})')
     (out / 'report.json').write_text(json.dumps(report, indent=1))
 
 
