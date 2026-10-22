@@ -66,7 +66,9 @@ class LoadFPScene(io.ComfyNode):
     def execute(cls, scene_file, width, height, capture_mode=True, main_prop='', armature_name='', setup=None):
         from motionbridge.core import fp_track
         source = resolve_input(scene_file, ('.blend',))
-        folder = output_folder('fp_scene', f'{source.stem}_{digest(source, width, height, armature_name, Path(__file__))}')
+        # keyed by the scripts that build the folder, not this file: a node edit mustn't redo every take downstream
+        blender = Path(__file__).resolve().parents[1] / 'blender'
+        folder = output_folder('fp_scene', f'{source.stem}_{digest(source, width, height, armature_name, blender / "fp_scene.py", blender / "fp_capture.py")}')
         if not (folder / 'rig.json').exists():
             args = ['--file', source, '--outdir', folder, '--size', width, height] + (['--armature', armature_name] if armature_name else [])
             run_blender('fp_scene.py', args, folder / 'fp_scene.log')
