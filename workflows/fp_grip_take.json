@@ -1,0 +1,2133 @@
+{
+ "id": "8471045a-20b1-51e9-8352-41e5e30baba7",
+ "revision": 0,
+ "last_node_id": 38,
+ "last_link_id": 51,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "MarkdownNote",
+   "pos": [
+    -620,
+    -40
+   ],
+   "size": [
+    580,
+    760
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {},
+   "widgets_values": [
+    "# Grip take -> start pose\nDo the grab **once**, then start every later animation from the settled grip.\n\n**Stage 1** is the first-person workflow: neutral arms, prop floating in the middle, H3 animates the grab,\nTrack FP Hands fits the rig. Its exported BLEND ends on the grip.\n\n**Between the stages** (in progress, no node yet): turn the end of the take into a start scene. The script\naverages the last frames (hands, fingers, prop) into one steady pose:\n```\nblender -b --python motionbridge/blender/fp_grip.py -- --scene <fp_scene folder>/scene.blend\n        --track <fp_motion folder>/track.npz --out ComfyUI/input/motionbridge/rifle_grip.blend\n        --frames 8 --render grip.png\n```\nBoth folders are under `ComfyUI/output/motionbridge/` (Track FP Hands' report names them). Or open the exported\nBLEND in Blender, go to the last frame and save it as your start scene.\n\n**Stage 2** is muted until that file exists: select its nodes and press Ctrl+M to unmute, then Run (stage 1 is\ncached, so only stage 2 runs). It loads the grip scene. The main prop is now the one a hand holds in the start pose, so H3 only has to\nanimate the action (aim, reload, inspect...), and every action starts from the same grip."
+   ],
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 2,
+   "type": "MotionBridgeSetup",
+   "pos": [
+    20,
+    -40
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "status",
+     "type": "STRING",
+     "links": [
+      1,
+      27
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeSetup"
+   },
+   "widgets_values": [
+    false,
+    "use installed, else download",
+    ""
+   ],
+   "size": [
+    340,
+    142
+   ]
+  },
+  {
+   "id": 3,
+   "type": "MotionBridgeLoadFPScene",
+   "pos": [
+    20,
+    200
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "setup",
+     "type": "STRING",
+     "link": 1,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fp_scene",
+     "type": "MOTIONBRIDGE_FP_SCENE",
+     "links": [
+      23
+     ]
+    },
+    {
+     "name": "start_frame",
+     "type": "IMAGE",
+     "links": [
+      2,
+      3
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeLoadFPScene"
+   },
+   "widgets_values": [
+    "motionbridge/rifle_neutral.blend",
+    1280,
+    720,
+    true,
+    "",
+    ""
+   ],
+   "size": [
+    360,
+    250
+   ]
+  },
+  {
+   "id": 4,
+   "type": "PreviewImage",
+   "pos": [
+    20,
+    480
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 2
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewImage"
+   },
+   "widgets_values": [],
+   "title": "start frame (neutral)",
+   "size": [
+    360,
+    230
+   ]
+  },
+  {
+   "id": 5,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    420,
+    200
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 3
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      4,
+      10
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageScaleToTotalPixels"
+   },
+   "widgets_values": [
+    "lanczos",
+    0.7,
+    32
+   ],
+   "size": [
+    340,
+    166
+   ]
+  },
+  {
+   "id": 6,
+   "type": "GetImageSize",
+   "pos": [
+    420,
+    390
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 4
+    }
+   ],
+   "outputs": [
+    {
+     "name": "width",
+     "type": "INT",
+     "links": [
+      8
+     ]
+    },
+    {
+     "name": "height",
+     "type": "INT",
+     "links": [
+      9
+     ]
+    },
+    {
+     "name": "batch_size",
+     "type": "INT",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "GetImageSize"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    142
+   ]
+  },
+  {
+   "id": 7,
+   "type": "UNETLoader",
+   "pos": [
+    800,
+    200
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      5
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "UNETLoader",
+    "models": [
+     {
+      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "directory": "diffusion_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "default"
+   ],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 8,
+   "type": "LoraLoaderModelOnly",
+   "pos": [
+    800,
+    330
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 5
+    }
+   ],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      11,
+      13,
+      36,
+      38
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoraLoaderModelOnly",
+    "models": [
+     {
+      "name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "url": "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "directory": "loras"
+     }
+    ]
+   },
+   "widgets_values": [
+    "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+    1.0
+   ],
+   "size": [
+    340,
+    142
+   ]
+  },
+  {
+   "id": 9,
+   "type": "CLIPLoader",
+   "pos": [
+    800,
+    470
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      6,
+      31
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPLoader",
+    "models": [
+     {
+      "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "directory": "text_encoders"
+     }
+    ]
+   },
+   "widgets_values": [
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax",
+    "default"
+   ],
+   "size": [
+    340,
+    142
+   ]
+  },
+  {
+   "id": 10,
+   "type": "VAELoader",
+   "pos": [
+    800,
+    620
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": [
+      7,
+      20,
+      32,
+      45
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAELoader",
+    "models": [
+     {
+      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+      "directory": "vae"
+     }
+    ]
+   },
+   "widgets_values": [
+    "minimax_h3_video_vae_int8_convrot.safetensors"
+   ],
+   "size": [
+    340,
+    94
+   ]
+  },
+  {
+   "id": 11,
+   "type": "MiniMaxH3ImageToVideo",
+   "pos": [
+    1180,
+    200
+   ],
+   "flags": {},
+   "order": 10,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 6
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 7
+    },
+    {
+     "name": "width",
+     "type": "INT",
+     "widget": {
+      "name": "width"
+     },
+     "link": 8
+    },
+    {
+     "name": "height",
+     "type": "INT",
+     "widget": {
+      "name": "height"
+     },
+     "link": 9
+    },
+    {
+     "name": "first_frame",
+     "type": "IMAGE",
+     "link": 10,
+     "shape": 7
+    },
+    {
+     "name": "last_frame",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "links": [
+      12
+     ]
+    },
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      18
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MiniMaxH3ImageToVideo"
+   },
+   "widgets_values": [
+    "First-person view, locked-off camera. The right hand wears an orange glove and the left hand wears a blue glove; the rifle is clear see-through glass and floats in front. Both hands reach forward and take a firm, natural hold of the rifle: the orange right hand wraps around the pistol grip with the index finger along the side above the trigger, the blue left hand grips the handguard from below. Then both hands hold the rifle steady and still.",
+    1344,
+    768,
+    73
+   ],
+   "size": [
+    460,
+    420
+   ]
+  },
+  {
+   "id": 12,
+   "type": "RandomNoise",
+   "pos": [
+    1680,
+    200
+   ],
+   "flags": {},
+   "order": 11,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "NOISE",
+     "type": "NOISE",
+     "links": [
+      14
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "RandomNoise"
+   },
+   "widgets_values": [
+    21092631,
+    "fixed"
+   ],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 13,
+   "type": "BasicGuider",
+   "pos": [
+    1680,
+    330
+   ],
+   "flags": {},
+   "order": 12,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 11
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 12
+    }
+   ],
+   "outputs": [
+    {
+     "name": "GUIDER",
+     "type": "GUIDER",
+     "links": [
+      15
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "BasicGuider"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 14,
+   "type": "KSamplerSelect",
+   "pos": [
+    1680,
+    450
+   ],
+   "flags": {},
+   "order": 13,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "SAMPLER",
+     "type": "SAMPLER",
+     "links": [
+      16
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "KSamplerSelect"
+   },
+   "widgets_values": [
+    "res_multistep"
+   ],
+   "size": [
+    340,
+    94
+   ]
+  },
+  {
+   "id": 15,
+   "type": "BasicScheduler",
+   "pos": [
+    1680,
+    550
+   ],
+   "flags": {},
+   "order": 14,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 13
+    }
+   ],
+   "outputs": [
+    {
+     "name": "SIGMAS",
+     "type": "SIGMAS",
+     "links": [
+      17
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "BasicScheduler"
+   },
+   "widgets_values": [
+    "simple",
+    8,
+    1.0
+   ],
+   "size": [
+    340,
+    166
+   ]
+  },
+  {
+   "id": 16,
+   "type": "SamplerCustomAdvanced",
+   "pos": [
+    2060,
+    200
+   ],
+   "flags": {},
+   "order": 15,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "noise",
+     "type": "NOISE",
+     "link": 14
+    },
+    {
+     "name": "guider",
+     "type": "GUIDER",
+     "link": 15
+    },
+    {
+     "name": "sampler",
+     "type": "SAMPLER",
+     "link": 16
+    },
+    {
+     "name": "sigmas",
+     "type": "SIGMAS",
+     "link": 17
+    },
+    {
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 18
+    }
+   ],
+   "outputs": [
+    {
+     "name": "output",
+     "type": "LATENT",
+     "links": [
+      19
+     ]
+    },
+    {
+     "name": "denoised_output",
+     "type": "LATENT",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SamplerCustomAdvanced"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    214
+   ]
+  },
+  {
+   "id": 17,
+   "type": "VAEDecode",
+   "pos": [
+    2060,
+    430
+   ],
+   "flags": {},
+   "order": 16,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 19
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 20
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      21,
+      24
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEDecode"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 18,
+   "type": "CreateVideo",
+   "pos": [
+    2060,
+    550
+   ],
+   "flags": {},
+   "order": 17,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 21
+    },
+    {
+     "name": "audio",
+     "type": "AUDIO",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "VIDEO",
+     "type": "VIDEO",
+     "links": [
+      22
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CreateVideo"
+   },
+   "widgets_values": [
+    24.0,
+    "auto",
+    "sRGB",
+    "none"
+   ],
+   "size": [
+    340,
+    214
+   ]
+  },
+  {
+   "id": 19,
+   "type": "SaveVideo",
+   "pos": [
+    2440,
+    200
+   ],
+   "flags": {},
+   "order": 18,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "link": 22
+    }
+   ],
+   "outputs": [
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SaveVideo"
+   },
+   "widgets_values": [
+    "motionbridge/fp_grip_take",
+    "mp4",
+    "auto"
+   ],
+   "size": [
+    420,
+    420
+   ]
+  },
+  {
+   "id": 20,
+   "type": "MotionBridgeTrackFPHands",
+   "pos": [
+    2880,
+    200
+   ],
+   "flags": {},
+   "order": 19,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "fp_scene",
+     "type": "MOTIONBRIDGE_FP_SCENE",
+     "link": 23
+    },
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 24,
+     "shape": 7
+    },
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fp_motion",
+     "type": "MOTIONBRIDGE_FP_MOTION",
+     "links": [
+      26
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": [
+      25
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeTrackFPHands"
+   },
+   "widgets_values": [
+    24.0,
+    0.7,
+    "both"
+   ],
+   "size": [
+    360,
+    200
+   ]
+  },
+  {
+   "id": 21,
+   "type": "PreviewAny",
+   "pos": [
+    2880,
+    430
+   ],
+   "flags": {},
+   "order": 20,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 25
+    }
+   ],
+   "outputs": [
+    {
+     "name": "STRING",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": [],
+   "title": "tracking report",
+   "size": [
+    360,
+    200
+   ]
+  },
+  {
+   "id": 22,
+   "type": "MotionBridgeExportFP",
+   "pos": [
+    3280,
+    200
+   ],
+   "flags": {},
+   "order": 21,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "fp_motion",
+     "type": "MOTIONBRIDGE_FP_MOTION",
+     "link": 26
+    }
+   ],
+   "outputs": [
+    {
+     "name": "preview",
+     "type": "VIDEO",
+     "links": []
+    },
+    {
+     "name": "files",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeExportFP"
+   },
+   "widgets_values": [
+    "motionbridge/fp_grip",
+    "fp_motion",
+    true,
+    "side by side"
+   ],
+   "size": [
+    420,
+    460
+   ]
+  },
+  {
+   "id": 23,
+   "type": "MotionBridgeLoadFPScene",
+   "pos": [
+    20,
+    920
+   ],
+   "flags": {},
+   "order": 22,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "setup",
+     "type": "STRING",
+     "link": 27,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fp_scene",
+     "type": "MOTIONBRIDGE_FP_SCENE",
+     "links": [
+      48
+     ]
+    },
+    {
+     "name": "start_frame",
+     "type": "IMAGE",
+     "links": [
+      28,
+      29
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeLoadFPScene"
+   },
+   "widgets_values": [
+    "motionbridge/rifle_grip.blend",
+    1280,
+    720,
+    true,
+    "",
+    ""
+   ],
+   "size": [
+    360,
+    250
+   ]
+  },
+  {
+   "id": 24,
+   "type": "PreviewImage",
+   "pos": [
+    20,
+    1200
+   ],
+   "flags": {},
+   "order": 23,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 28
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewImage"
+   },
+   "widgets_values": [],
+   "title": "start frame (grip)",
+   "size": [
+    360,
+    230
+   ]
+  },
+  {
+   "id": 25,
+   "type": "ImageScaleToTotalPixels",
+   "pos": [
+    420,
+    920
+   ],
+   "flags": {},
+   "order": 24,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 29
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      30,
+      35
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ImageScaleToTotalPixels"
+   },
+   "widgets_values": [
+    "lanczos",
+    0.7,
+    32
+   ],
+   "size": [
+    340,
+    166
+   ]
+  },
+  {
+   "id": 26,
+   "type": "GetImageSize",
+   "pos": [
+    420,
+    1110
+   ],
+   "flags": {},
+   "order": 25,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 30
+    }
+   ],
+   "outputs": [
+    {
+     "name": "width",
+     "type": "INT",
+     "links": [
+      33
+     ]
+    },
+    {
+     "name": "height",
+     "type": "INT",
+     "links": [
+      34
+     ]
+    },
+    {
+     "name": "batch_size",
+     "type": "INT",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "GetImageSize"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    142
+   ]
+  },
+  {
+   "id": 27,
+   "type": "MiniMaxH3ImageToVideo",
+   "pos": [
+    1180,
+    920
+   ],
+   "flags": {},
+   "order": 26,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 31
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 32
+    },
+    {
+     "name": "width",
+     "type": "INT",
+     "widget": {
+      "name": "width"
+     },
+     "link": 33
+    },
+    {
+     "name": "height",
+     "type": "INT",
+     "widget": {
+      "name": "height"
+     },
+     "link": 34
+    },
+    {
+     "name": "first_frame",
+     "type": "IMAGE",
+     "link": 35,
+     "shape": 7
+    },
+    {
+     "name": "last_frame",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "positive",
+     "type": "CONDITIONING",
+     "links": [
+      37
+     ]
+    },
+    {
+     "name": "LATENT",
+     "type": "LATENT",
+     "links": [
+      43
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MiniMaxH3ImageToVideo"
+   },
+   "widgets_values": [
+    "First-person view, locked-off camera. The right hand wears an orange glove and the left hand wears a blue glove; they hold a clear see-through glass rifle. Keeping that exact grip, both hands raise the rifle slightly and sweep it slowly from left to right as if scanning a room, then lower it back to the start position. Fingers stay wrapped on the grip and handguard throughout.",
+    1344,
+    768,
+    73
+   ],
+   "size": [
+    460,
+    420
+   ]
+  },
+  {
+   "id": 28,
+   "type": "RandomNoise",
+   "pos": [
+    1680,
+    920
+   ],
+   "flags": {},
+   "order": 27,
+   "mode": 2,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "NOISE",
+     "type": "NOISE",
+     "links": [
+      39
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "RandomNoise"
+   },
+   "widgets_values": [
+    21092631,
+    "fixed"
+   ],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 29,
+   "type": "BasicGuider",
+   "pos": [
+    1680,
+    1050
+   ],
+   "flags": {},
+   "order": 28,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 36
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 37
+    }
+   ],
+   "outputs": [
+    {
+     "name": "GUIDER",
+     "type": "GUIDER",
+     "links": [
+      40
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "BasicGuider"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 30,
+   "type": "KSamplerSelect",
+   "pos": [
+    1680,
+    1170
+   ],
+   "flags": {},
+   "order": 29,
+   "mode": 2,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "SAMPLER",
+     "type": "SAMPLER",
+     "links": [
+      41
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "KSamplerSelect"
+   },
+   "widgets_values": [
+    "res_multistep"
+   ],
+   "size": [
+    340,
+    94
+   ]
+  },
+  {
+   "id": 31,
+   "type": "BasicScheduler",
+   "pos": [
+    1680,
+    1270
+   ],
+   "flags": {},
+   "order": 30,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 38
+    }
+   ],
+   "outputs": [
+    {
+     "name": "SIGMAS",
+     "type": "SIGMAS",
+     "links": [
+      42
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "BasicScheduler"
+   },
+   "widgets_values": [
+    "simple",
+    8,
+    1.0
+   ],
+   "size": [
+    340,
+    166
+   ]
+  },
+  {
+   "id": 32,
+   "type": "SamplerCustomAdvanced",
+   "pos": [
+    2060,
+    920
+   ],
+   "flags": {},
+   "order": 31,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "noise",
+     "type": "NOISE",
+     "link": 39
+    },
+    {
+     "name": "guider",
+     "type": "GUIDER",
+     "link": 40
+    },
+    {
+     "name": "sampler",
+     "type": "SAMPLER",
+     "link": 41
+    },
+    {
+     "name": "sigmas",
+     "type": "SIGMAS",
+     "link": 42
+    },
+    {
+     "name": "latent_image",
+     "type": "LATENT",
+     "link": 43
+    }
+   ],
+   "outputs": [
+    {
+     "name": "output",
+     "type": "LATENT",
+     "links": [
+      44
+     ]
+    },
+    {
+     "name": "denoised_output",
+     "type": "LATENT",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SamplerCustomAdvanced"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    214
+   ]
+  },
+  {
+   "id": 33,
+   "type": "VAEDecode",
+   "pos": [
+    2060,
+    1150
+   ],
+   "flags": {},
+   "order": 32,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "samples",
+     "type": "LATENT",
+     "link": 44
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 45
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      46,
+      49
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "VAEDecode"
+   },
+   "widgets_values": [],
+   "size": [
+    340,
+    118
+   ]
+  },
+  {
+   "id": 34,
+   "type": "CreateVideo",
+   "pos": [
+    2060,
+    1270
+   ],
+   "flags": {},
+   "order": 33,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 46
+    },
+    {
+     "name": "audio",
+     "type": "AUDIO",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "VIDEO",
+     "type": "VIDEO",
+     "links": [
+      47
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CreateVideo"
+   },
+   "widgets_values": [
+    24.0,
+    "auto",
+    "sRGB",
+    "none"
+   ],
+   "size": [
+    340,
+    214
+   ]
+  },
+  {
+   "id": 35,
+   "type": "SaveVideo",
+   "pos": [
+    2440,
+    920
+   ],
+   "flags": {},
+   "order": 34,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "link": 47
+    }
+   ],
+   "outputs": [
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SaveVideo"
+   },
+   "widgets_values": [
+    "motionbridge/fp_action_take",
+    "mp4",
+    "auto"
+   ],
+   "size": [
+    420,
+    420
+   ]
+  },
+  {
+   "id": 36,
+   "type": "MotionBridgeTrackFPHands",
+   "pos": [
+    2880,
+    920
+   ],
+   "flags": {},
+   "order": 35,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "fp_scene",
+     "type": "MOTIONBRIDGE_FP_SCENE",
+     "link": 48
+    },
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 49,
+     "shape": 7
+    },
+    {
+     "name": "video",
+     "type": "VIDEO",
+     "link": null,
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "fp_motion",
+     "type": "MOTIONBRIDGE_FP_MOTION",
+     "links": [
+      51
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": [
+      50
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeTrackFPHands"
+   },
+   "widgets_values": [
+    24.0,
+    0.7,
+    "both"
+   ],
+   "size": [
+    360,
+    200
+   ]
+  },
+  {
+   "id": 37,
+   "type": "PreviewAny",
+   "pos": [
+    2880,
+    1150
+   ],
+   "flags": {},
+   "order": 36,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 50
+    }
+   ],
+   "outputs": [
+    {
+     "name": "STRING",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": [],
+   "title": "tracking report",
+   "size": [
+    360,
+    200
+   ]
+  },
+  {
+   "id": 38,
+   "type": "MotionBridgeExportFP",
+   "pos": [
+    3280,
+    920
+   ],
+   "flags": {},
+   "order": 37,
+   "mode": 2,
+   "inputs": [
+    {
+     "name": "fp_motion",
+     "type": "MOTIONBRIDGE_FP_MOTION",
+     "link": 51
+    }
+   ],
+   "outputs": [
+    {
+     "name": "preview",
+     "type": "VIDEO",
+     "links": []
+    },
+    {
+     "name": "files",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeExportFP"
+   },
+   "widgets_values": [
+    "motionbridge/fp_action",
+    "fp_motion",
+    true,
+    "side by side"
+   ],
+   "size": [
+    420,
+    460
+   ]
+  }
+ ],
+ "links": [
+  [
+   1,
+   2,
+   0,
+   3,
+   0,
+   "STRING"
+  ],
+  [
+   2,
+   3,
+   1,
+   4,
+   0,
+   "IMAGE"
+  ],
+  [
+   3,
+   3,
+   1,
+   5,
+   0,
+   "IMAGE"
+  ],
+  [
+   4,
+   5,
+   0,
+   6,
+   0,
+   "IMAGE"
+  ],
+  [
+   5,
+   7,
+   0,
+   8,
+   0,
+   "MODEL"
+  ],
+  [
+   6,
+   9,
+   0,
+   11,
+   0,
+   "CLIP"
+  ],
+  [
+   7,
+   10,
+   0,
+   11,
+   1,
+   "VAE"
+  ],
+  [
+   8,
+   6,
+   0,
+   11,
+   2,
+   "INT"
+  ],
+  [
+   9,
+   6,
+   1,
+   11,
+   3,
+   "INT"
+  ],
+  [
+   10,
+   5,
+   0,
+   11,
+   4,
+   "IMAGE"
+  ],
+  [
+   11,
+   8,
+   0,
+   13,
+   0,
+   "MODEL"
+  ],
+  [
+   12,
+   11,
+   0,
+   13,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   13,
+   8,
+   0,
+   15,
+   0,
+   "MODEL"
+  ],
+  [
+   14,
+   12,
+   0,
+   16,
+   0,
+   "NOISE"
+  ],
+  [
+   15,
+   13,
+   0,
+   16,
+   1,
+   "GUIDER"
+  ],
+  [
+   16,
+   14,
+   0,
+   16,
+   2,
+   "SAMPLER"
+  ],
+  [
+   17,
+   15,
+   0,
+   16,
+   3,
+   "SIGMAS"
+  ],
+  [
+   18,
+   11,
+   1,
+   16,
+   4,
+   "LATENT"
+  ],
+  [
+   19,
+   16,
+   0,
+   17,
+   0,
+   "LATENT"
+  ],
+  [
+   20,
+   10,
+   0,
+   17,
+   1,
+   "VAE"
+  ],
+  [
+   21,
+   17,
+   0,
+   18,
+   0,
+   "IMAGE"
+  ],
+  [
+   22,
+   18,
+   0,
+   19,
+   0,
+   "VIDEO"
+  ],
+  [
+   23,
+   3,
+   0,
+   20,
+   0,
+   "MOTIONBRIDGE_FP_SCENE"
+  ],
+  [
+   24,
+   17,
+   0,
+   20,
+   1,
+   "IMAGE"
+  ],
+  [
+   25,
+   20,
+   1,
+   21,
+   0,
+   "STRING"
+  ],
+  [
+   26,
+   20,
+   0,
+   22,
+   0,
+   "MOTIONBRIDGE_FP_MOTION"
+  ],
+  [
+   27,
+   2,
+   0,
+   23,
+   0,
+   "STRING"
+  ],
+  [
+   28,
+   23,
+   1,
+   24,
+   0,
+   "IMAGE"
+  ],
+  [
+   29,
+   23,
+   1,
+   25,
+   0,
+   "IMAGE"
+  ],
+  [
+   30,
+   25,
+   0,
+   26,
+   0,
+   "IMAGE"
+  ],
+  [
+   31,
+   9,
+   0,
+   27,
+   0,
+   "CLIP"
+  ],
+  [
+   32,
+   10,
+   0,
+   27,
+   1,
+   "VAE"
+  ],
+  [
+   33,
+   26,
+   0,
+   27,
+   2,
+   "INT"
+  ],
+  [
+   34,
+   26,
+   1,
+   27,
+   3,
+   "INT"
+  ],
+  [
+   35,
+   25,
+   0,
+   27,
+   4,
+   "IMAGE"
+  ],
+  [
+   36,
+   8,
+   0,
+   29,
+   0,
+   "MODEL"
+  ],
+  [
+   37,
+   27,
+   0,
+   29,
+   1,
+   "CONDITIONING"
+  ],
+  [
+   38,
+   8,
+   0,
+   31,
+   0,
+   "MODEL"
+  ],
+  [
+   39,
+   28,
+   0,
+   32,
+   0,
+   "NOISE"
+  ],
+  [
+   40,
+   29,
+   0,
+   32,
+   1,
+   "GUIDER"
+  ],
+  [
+   41,
+   30,
+   0,
+   32,
+   2,
+   "SAMPLER"
+  ],
+  [
+   42,
+   31,
+   0,
+   32,
+   3,
+   "SIGMAS"
+  ],
+  [
+   43,
+   27,
+   1,
+   32,
+   4,
+   "LATENT"
+  ],
+  [
+   44,
+   32,
+   0,
+   33,
+   0,
+   "LATENT"
+  ],
+  [
+   45,
+   10,
+   0,
+   33,
+   1,
+   "VAE"
+  ],
+  [
+   46,
+   33,
+   0,
+   34,
+   0,
+   "IMAGE"
+  ],
+  [
+   47,
+   34,
+   0,
+   35,
+   0,
+   "VIDEO"
+  ],
+  [
+   48,
+   23,
+   0,
+   36,
+   0,
+   "MOTIONBRIDGE_FP_SCENE"
+  ],
+  [
+   49,
+   33,
+   0,
+   36,
+   1,
+   "IMAGE"
+  ],
+  [
+   50,
+   36,
+   1,
+   37,
+   0,
+   "STRING"
+  ],
+  [
+   51,
+   36,
+   0,
+   38,
+   0,
+   "MOTIONBRIDGE_FP_MOTION"
+  ]
+ ],
+ "groups": [
+  {
+   "id": 1,
+   "title": "Setup",
+   "bounding": [
+    0,
+    -100,
+    400,
+    220
+   ],
+   "color": "#3f789e",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 2,
+   "title": "Stage 1: grip take (neutral arms, prop in the middle)",
+   "bounding": [
+    0,
+    140,
+    3720,
+    680
+   ],
+   "color": "#8A8",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 3,
+   "title": "Stage 2 (muted until the grip scene exists): an action from the grip",
+   "bounding": [
+    0,
+    860,
+    3720,
+    680
+   ],
+   "color": "#b06634",
+   "font_size": 24,
+   "flags": {}
+  }
+ ],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 0.55,
+   "offset": [
+    80,
+    120
+   ]
+  },
+  "title": "MotionBridge: grip take, then actions from that grip"
+ },
+ "version": 0.4
+}

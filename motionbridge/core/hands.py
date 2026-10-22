@@ -23,6 +23,7 @@ PER_FINGER = 4
 # Joint limits per finger value (bend base, spread, bend middle, bend tip), radians
 LIMITS = {'Thumb': ((-0.4, 1.2), (-0.6, 0.8), (-0.3, 1.3), (-0.4, 1.5)),
           'other': ((-0.35, 1.7), (-0.35, 0.35), (-0.05, 1.9), (-0.1, 1.5))}
+THUMB_TO_CENTRE = True  # thumb bend axis: curl toward the palm's middle (False: like a finger, out of the palm's front)
 
 
 @dataclass
@@ -127,13 +128,19 @@ class HandModel:
         if hand.side == 'Left':
             normal = -normal
         self.palm_normal = normal                         # world space at rest, points out of the palm
+        # A thumb's nail faces sideways, so it curls toward the middle of the palm, not out of its front
+        centre = np.mean([wrist] + [p(j[0]) for f, j in hand.fingers.items() if f != 'Thumb'], axis=0)
         self.axes = {}                                    # bone -> (bend axis, spread axis) in bone-local space
         for f, joints in hand.fingers.items():
             for k, n in enumerate(joints):
                 r = rest[skeleton.index[n], :3, :3]
                 r = r / np.linalg.norm(r, axis=0)
                 d = r[:, 1]
-                bend = np.cross(d, normal); bend /= np.linalg.norm(bend) + 1e-9
+                toward = normal
+                if f == 'Thumb' and THUMB_TO_CENTRE:
+                    toward = centre - p(n)
+                    toward = toward - (toward @ d) * d
+                bend = np.cross(d, toward); bend /= np.linalg.norm(bend) + 1e-9
                 spread = normal if f != 'Thumb' else np.cross(bend, d)
                 self.axes[n] = (r.T @ bend, r.T @ spread)
 

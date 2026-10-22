@@ -10,6 +10,7 @@ downloads and resumes interrupted downloads, so running it again is cheap. Layou
     env/          GEM's own Python environment (kept apart from ComfyUI's packages)
     blender/      portable Blender, unless an installed one is used
     cache/        TORCH_HOME / HF_HOME for the GEM subprocess (YOLOX detector lands here)
+    sam2/         SAM 2 checkpoint (first-person hands: arm and item masks)
 """
 import argparse
 import json
@@ -47,12 +48,14 @@ SOMA_LFS = ['Anny/SOMA_wrap.obj', 'Anny/base_body.obj', 'GarmentMeasurements/SOM
             'MHR/base_body_lod1.obj', 'MHR/base_body_lod6.obj', 'MHR/mhr_model_lod1.pt', 'MHR/mhr_model_lod6.pt',
             'SMPL/SOMA_wrap.obj', 'SMPL/base_body.obj', 'SMPL/smpl_anim.npy', 'SMPLX/SOMA_wrap.obj',
             'SMPLX/base_body.obj', 'SOMA_neutral.npz', 'correctives_model.pt', 'example_animation.npy']
+SAM2 = ('sam2==1.1.0', 'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt', 184416285)
 BLENDER = ('5.0.1', 'https://download.blender.org/release/Blender5.0/blender-5.0.1-windows-x64.zip')
 TORCH_INDEX = 'https://download.pytorch.org/whl/cu126'
 
 LICENSES = """MotionBridge downloads third-party software and model weights. By accepting you agree to their terms:
   GEM-X code (Apache-2.0) and GEM weights (NVIDIA Open Model License)   https://huggingface.co/nvidia/GEM-X
   SAM 3D Body weights, redistributed in the GEM-X repository (SAM License) https://github.com/facebookresearch/sam-3d-body
+  SAM 2 code and weights (Apache-2.0)                                     https://github.com/facebookresearch/sam2
   SOMA body model (Apache-2.0)                                             https://github.com/NVlabs/SOMA-X
   Blender, if downloaded (GPL)                                             https://www.blender.org/about/license/
   uv (Apache-2.0 / MIT) and the Python packages in gem_requirements.txt (their own licenses)"""
@@ -69,6 +72,7 @@ class Runtime:
         self.gem_python = self.env / ('Scripts/python.exe' if WINDOWS else 'bin/python')
         self.cache = self.home / 'cache'
         self.state_file = self.home / 'state.json'
+        self.sam2_checkpoint = self.home / 'sam2' / Path(SAM2[1]).name
 
     def state(self):
         return json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
@@ -106,6 +110,8 @@ class Runtime:
             gaps.append('SOMA body model assets')
         if not self.state().get('env_ready') or not self.gem_python.exists():
             gaps.append('GEM Python environment')
+        if not self.state().get('sam2_ready') or not self.sam2_checkpoint.exists() or self.sam2_checkpoint.stat().st_size != SAM2[2]:
+            gaps.append('SAM 2 (first-person hands)')
         try:
             self.blender()
         except RuntimeError:
@@ -216,7 +222,7 @@ def install(home, accept_licenses=False, blender='auto', progress=None):
         raise RuntimeError('Automatic setup currently supports Windows x64 with an NVIDIA GPU. See README for manual setup.')
     rt = Runtime(home)
     downloads = rt.home / 'downloads'
-    steps = ['uv', 'source', 'soma assets', 'weights', 'environment', 'detector', 'blender']
+    steps = ['uv', 'source', 'soma assets', 'weights', 'environment', 'detector', 'sam2', 'blender']
 
     def step(i, text):
         log(f'[{i + 1}/{len(steps)}] {text}')
@@ -268,7 +274,14 @@ def install(home, accept_licenses=False, blender='auto', progress=None):
     run([rt.gem_python, '-c', 'from gem.utils.yolox_detector import _download_yolox_onnx as d; print(d())'], rt,
         cwd=rt.gem_root)
 
-    step(6, 'Blender')
+    step(6, 'SAM 2 (first-person hands, ~0.2 GB)')
+    if not rt.state().get('sam2_ready'):
+        # pure Python install into GEM's environment, which already has its dependencies; no CUDA build
+        run([rt.uv, 'pip', 'install', '--python', rt.gem_python, '--no-deps', SAM2[0]], rt)
+        rt.remember(sam2_ready=True)
+    download(SAM2[1], rt.sam2_checkpoint, SAM2[2])
+
+    step(7, 'Blender')
     if blender not in ('auto', 'download'):
         if not Path(blender).is_file():
             raise FileNotFoundError(f'Blender not found at {blender}')

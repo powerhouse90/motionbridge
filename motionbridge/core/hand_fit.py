@@ -27,11 +27,14 @@ GATE_MIN = 0.08    # ...and GATE_MIN of the hand's size on screen
 
 
 def project(points, camera):
-    """World points (N, 3) -> pixels (N, 2) through camera {world, lens, sensor, W, H}."""
+    """World points (N, 3) -> pixels (N, 2) through camera {world, lens, sensor, W, H[, aspect]}.
+    aspect: vertical / horizontal pixel scale, for frames resized unevenly (a video model rounding
+    its size to multiples of 32); 1 when omitted."""
     m = np.linalg.inv(np.array(camera['world']))
     c = points @ m[:3, :3].T + m[:3, 3]
     f = camera['lens'] / camera['sensor'] * camera['W']
-    return np.c_[camera['W'] / 2 + f * c[:, 0] / -c[:, 2], camera['H'] / 2 - f * c[:, 1] / -c[:, 2]]
+    fy = f * camera.get('aspect', 1.0)
+    return np.c_[camera['W'] / 2 + f * c[:, 0] / -c[:, 2], camera['H'] / 2 - fy * c[:, 1] / -c[:, 2]]
 
 
 def finger_slices(model):

@@ -7,11 +7,26 @@ NVIDIA GEM, or text through NVIDIA Kimodo) writes one canonical skeleton, SOMA's
 77 joints. Cleanup runs once on that skeleton. A generic retargeter then maps it
 onto any humanoid rig without per-character calibration.
 
+## Workflows and guides
+
+Drag a workflow from [`workflows/`](workflows) into ComfyUI. Each one has notes on every step.
+
+| Workflow | What it does | Guide |
+| --- | --- | --- |
+| [`full_body.json`](workflows/full_body.json) | Your character: starting views → H3 → GEM motion → smooth → retarget → BLEND/FBX/GLB | [Full body](docs/full_body.md) |
+| [`fp_hands.json`](workflows/fp_hands.json) | FPS arms: neutral start, H3 grip take, hands, fingers and the held prop tracked onto your rig | [First person](docs/first_person.md) |
+| [`fp_grip_take.json`](workflows/fp_grip_take.json) | One grip take, then actions that start from that grip (the hand-off step is in progress) | [First person](docs/first_person.md#the-grip-take) |
+
+Also: [install](docs/install.md) · [troubleshooting](docs/troubleshooting.md). The workflows are generated
+from the installed nodes and checked by `python workflows/build_workflows.py --url http://127.0.0.1:8188`.
+
 ## Install
+
+Details in [docs/install.md](docs/install.md).
 
 1. Clone into `ComfyUI/custom_nodes/` and restart ComfyUI. The nodes use only what ComfyUI
    already ships (NumPy, SciPy, PyTorch, PyAV, Pillow).
-2. Open the example workflow and click Run with **accept_licenses** on in the
+2. Open an example workflow and click Run with **accept_licenses** on in the
    **MotionBridge Setup** node. The first run downloads, into `ComfyUI/models/motionbridge`:
    - GEM-X source and model weights from `nvidia/GEM-X` (~6.7 GB, no account needed)
    - GEM's own Python environment (~6 GB), built with uv so ComfyUI's packages are untouched
@@ -38,6 +53,9 @@ uploading it; Load Character warns when textures are missing.
 | Video to Motion (GEM) | 77-joint 3D motion from H3 output or any video |
 | Retarget Motion | Motion onto the character, its proportions kept, planted feet pinned |
 | Export Animated Character | BLEND + FBX + GLB, checked bone by bone, plus a preview video |
+| Load FP Scene | First person: finds the FPS arms, hands and main prop; renders the (capture-mode) start frame |
+| Track FP Hands | First person: arms, wrists, every finger and the held prop fitted to the H3 take |
+| Export FP Animation | First person: BLEND (IK kept) + FBX + GLB, preview next to the source video |
 
 ## Layout
 
