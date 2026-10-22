@@ -181,6 +181,7 @@ def arm_basis(sk, basis, arm_names, arm_world):
 
 GRASP_RUNNER = """
 import json, sys
+sys.path.insert(0, sys.argv.pop(1))  # the pack's root: ComfyUI portable's Python ignores PYTHONPATH
 import numpy as np
 from motionbridge.core import fp_track as fp, fp_grasp
 scene, extracted, inp, out, W, H, workers, strength = sys.argv[1:9]
@@ -224,7 +225,7 @@ def grasp_step(scene, dump, k, rigs, prop, motion, params, extracted, cam, stren
             progress(int(w[1]), int(w[2]))
         elif line:
             log(line)
-    run_process([sys.executable, '-c', GRASP_RUNNER, scene, extracted, inp, out, cam['W'], cam['H'], workers, strength],
+    run_process([sys.executable, '-c', GRASP_RUNNER, root, scene, extracted, inp, out, cam['W'], cam['H'], workers, strength],
                 folder / 'fp_grasp.log', 'Grasp step', env=env, on_line=on_line)
     d = np.load(out)
     return [d[f'params_{v}'] for v in sides], [list(d[f'holding_{v}']) for v in sides]
