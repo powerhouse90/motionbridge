@@ -238,7 +238,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     forearms rolled with the hands (fp_twist). Returns (track npz, report lines). Each step is cached by its
     inputs and the code that makes it."""
     import cv2
-    from motionbridge.core import fp_track, fp_points, fp_grasp, fp_twist, fp_elbow
+    from motionbridge.core import fp_track, fp_points, fp_grasp, fp_twist, fp_elbow, fp_hold
     sides = '_'.join(r.hand.side for r in rigs)
     T = len(ex[f'kp2d_{rigs[0].hand.side}'])
     lines = []
@@ -301,6 +301,12 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             final = fp_track.settle_contacts(rigs, prop, smoothed, final, None, cam, log=log)
     else:
         final = list(params)
+    if prop is not None:
+        # a hold lasts through what the video can't show: off screen or misread, the hand stays on its grip
+        for i, (rig, E) in enumerate(zip(rigs, errs)):
+            side = rig.hand.side
+            rel = fp_hold.reliability(ex[f'kp2d_{side}'], E, cam['W'], cam['H'])
+            final[i], _ = fp_hold.hold_lock(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam, log=lines.append)
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)
     if roll:
@@ -323,7 +329,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             h = np.array(holding[i])
             line += f'; holds the prop on {int((h > 0).sum())} frames, 4+ fingers on {int((h >= 4).sum())}'
         lines.append(line)
-    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__), Path(fp_elbow.__file__))}.npz'
+    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__), Path(fp_elbow.__file__), Path(fp_hold.__file__))}.npz'
     np.savez(track, names=np.array(rigs[0].names), basis=basis, arm_names=arm_names,
              items=np.array([smoothed]) if prop is not None else np.zeros((0, T, 4, 4)),
              item_roots=np.array([dump['items'][k]['root']] if prop is not None else []))
