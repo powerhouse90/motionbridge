@@ -238,7 +238,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     forearms rolled with the hands (fp_twist). Returns (track npz, report lines). Each step is cached by its
     inputs and the code that makes it."""
     import cv2
-    from motionbridge.core import fp_track, fp_points, fp_grasp, fp_twist
+    from motionbridge.core import fp_track, fp_points, fp_grasp, fp_twist, fp_elbow
     sides = '_'.join(r.hand.side for r in rigs)
     T = len(ex[f'kp2d_{rigs[0].hand.side}'])
     lines = []
@@ -304,11 +304,18 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)
     if roll:
-        arm_names, arm_world, rolls = fp_twist.forearm_roll(rigs, basis, log=None)
+        # the arms to their masks: where the shoulder sits (a viewmodel pushed forward and down when aiming), then
+        # the elbow's swing, then the forearm rolled with the hand
+        masks = {r.hand.side: ex[f'arm_{r.hand.side}'] for r in rigs if f'arm_{r.hand.side}' in ex.files}
+        offset = fp_elbow.fit_shoulders(rigs, basis, masks, cam, log=log)
+        swing, _ = fp_elbow.fit_elbows(rigs, basis, masks, cam, log=log, offset=offset)
+        arm_names, arm_world, rolls = fp_twist.forearm_roll(rigs, basis, log=log, swing=swing, offset=offset)
         if len(arm_names):
             basis = arm_basis(rigs[0].sk, basis, arm_names, arm_world)
             lines.append('forearm roll: ' + ', '.join(f'{side.lower()} median {np.median(np.abs(r)):.0f} deg, max {np.abs(r).max():.0f} deg'
                                                       for side, r in rolls.items()))
+            lines.append('shoulders fitted to the arm masks: ' + ', '.join(
+                f'{side.lower()} moved up to {np.linalg.norm(o, axis=1).max() * 100:.0f} cm' for side, o in offset.items()))
     for i, (rig, P, Q, E) in enumerate(zip(rigs, params, final, errs)):
         line = (f'{rig.hand.side.lower()} hand vs video: median {np.nanmedian(E) * 100:.1f}% of the hand\'s size, worst '
                 f'{np.nanmax(E) * 100:.1f}% (frame {int(np.nanargmax(E))}); jitter {fp_track.jitter(rig, P):.1f} -> {fp_track.jitter(rig, Q):.1f} mm/frame^2')
@@ -316,7 +323,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             h = np.array(holding[i])
             line += f'; holds the prop on {int((h > 0).sum())} frames, 4+ fingers on {int((h >= 4).sum())}'
         lines.append(line)
-    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__))}.npz'
+    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__), Path(fp_elbow.__file__))}.npz'
     np.savez(track, names=np.array(rigs[0].names), basis=basis, arm_names=arm_names,
              items=np.array([smoothed]) if prop is not None else np.zeros((0, T, 4, 4)),
              item_roots=np.array([dump['items'][k]['root']] if prop is not None else []))

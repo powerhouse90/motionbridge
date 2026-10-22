@@ -8,7 +8,7 @@ A Viterbi pass over a grid of swings gives the best path with a smoothness cost 
 composes with the forearm roll (same output as fp_twist.forearm_roll)."""
 import numpy as np
 from scipy.spatial.transform import Rotation
-from motionbridge.core.fp_twist import _aim
+from motionbridge.core import fp_twist
 from motionbridge.core.hand_fit import project
 from motionbridge.core.smooth import one_euro
 
@@ -26,17 +26,17 @@ SEEN = 200         # mask pixels (at 1/SCALE) outside the hand for a frame to co
 TAPER = (1.25, 1.1, 0.75)  # radius at shoulder, elbow, wrist relative to the calibrated one
 
 
-def chain(rig, pose, phi):
+def chain(rig, pose, phi, off=None):
     """(shoulder, elbow, wrist) for one frame's posed armature and a swing phi (deg) about the shoulder-wrist
     line, measured from the start plane (phi = 0 is Blender's IK result)."""
     fa = rig.forearm
-    s = fa['shoulder']
     wr = pose[rig.sk.index[rig.hand.hand]][:3, 3]
+    _, s, e0 = fp_twist.reach(rig, wr, off)  # the shoulder comes forward when the hand is out of reach
     dd = np.clip(np.linalg.norm(wr - s), 1e-6, fa['L1'] + fa['L2'] - 1e-4)
     u = (wr - s) / np.linalg.norm(wr - s)
     a = (fa['L1'] ** 2 - fa['L2'] ** 2 + dd ** 2) / (2 * dd)
     h = np.sqrt(max(fa['L1'] ** 2 - a ** 2, 0))
-    v = (fa['elbow0'] - s) - ((fa['elbow0'] - s) @ u) * u
+    v = (e0 - s) - ((e0 - s) @ u) * u
     v /= np.linalg.norm(v) + 1e-9
     v = Rotation.from_rotvec(u * np.radians(phi)).apply(v)
     return s, s + a * u + h * v, wr
@@ -98,8 +98,8 @@ def hand_zone(rig, pose, cam, shape):
     return z
 
 
-def _arm_segs(rig, pose, phi, k):
-    s, e, w = chain(rig, pose, phi)
+def _arm_segs(rig, pose, phi, k, off=None):
+    s, e, w = chain(rig, pose, phi, off)
     r = k * rig.forearm['L2']
     return [(s, e, r * TAPER[0], r * TAPER[1]), (e, w, r * TAPER[1], r * TAPER[2])]
 
@@ -109,8 +109,9 @@ def iou(a, b):
     return (a & b).sum() / u if u else 1.0
 
 
-def fit_elbows(rigs, basis, masks, cam, fps=24, log=print):
+def fit_elbows(rigs, basis, masks, cam, fps=24, log=print, offset=None):
     """rigs: fp_track.Rig per hand; basis: (T, B, 4, 4); masks: {side: (T, H, W) bool arm masks}.
+    offset: {side: (T, 3)} shoulder offsets (fit_shoulders), applied before the swing.
     Returns ({side: swing per frame, deg}, report {side: dict(thick, iou_plane, iou_fit)})."""
     T = len(basis)
     grid = np.arange(-LIMIT, LIMIT + 1e-6, STEP)
@@ -123,7 +124,8 @@ def fit_elbows(rigs, basis, masks, cam, fps=24, log=print):
         m = [_down(masks[side][t]) for t in range(T)]
         shape = m[0].shape
         keep = [~hand_zone(rig, poses[t], cam, shape) for t in range(T)]
-        score = lambda t, phi, k: iou(capsules(_arm_segs(rig, poses[t], phi, k), cam, shape) & keep[t], m[t] & keep[t])
+        off = offset[side] if offset and side in offset else np.zeros((T, 3))
+        score = lambda t, phi, k: iou(capsules(_arm_segs(rig, poses[t], phi, k, off[t]), cam, shape) & keep[t], m[t] & keep[t])
         seen = np.array([(m[t] & keep[t]).sum() for t in range(T)])
         calib = [t for t in np.argsort(-seen)[:CALIB] if seen[t] > SEEN / 4]
         coarse = grid[::2]
@@ -154,35 +156,63 @@ def fit_elbows(rigs, basis, masks, cam, fps=24, log=print):
     return angles, report
 
 
-def arm_world(rigs, basis, angles, log=print):
-    """fp_twist.forearm_roll with each frame's elbow swing: (arm_names, arm_world (T, 2 per arm, 4, 4), rolls)."""
+def arm_world(rigs, basis, angles, log=print, offset=None):
+    """fp_twist.forearm_roll with each frame's elbow swing and shoulder offset: (arm_names, arm_world (T, n, 4, 4), rolls)."""
+    return fp_twist.forearm_roll(rigs, basis, log=log, swing=angles, offset=offset)
+
+
+SHOULDER_RANGE = 0.15   # m: the shoulder may move this far (each camera axis) to fit the arm to its mask
+SHOULDER_STEP = 0.05    # m: grid of shoulder moves tried
+SHOULDER_EVERY = 4      # the shoulder is searched on every Nth frame, interpolated between
+SHOULDER_SLACK = 0.03   # IoU: among fits this close to the frame's best, the one moving least is kept
+SHOULDER_THICK = 0.20   # capsule radius / forearm length while searching (calibrated later, at the found shoulder)
+SHOULDER_CUTOFF = 1.0   # Hz: the shoulder path is low-passed (zero phase): a shoulder moves slowly
+
+
+def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print):
+    """The shoulder's place per frame, from the arm masks. A rig's shoulder is fixed to the camera, but a video's
+    arm comes from wherever the model drew it (an FPS viewmodel pushed forward and down when aiming): with the
+    shoulder fixed the arm can't bend to match, and a hand beyond reach stretches it. The shoulder is off-screen,
+    so the mask fixes only the direction the arm comes from: of the moves that fit about as well as the best,
+    the one closest to the last frame's and to none is kept. Frames showing little arm keep the last move.
+    Returns {side: (T, 3) world offsets}."""
     T = len(basis)
-    names, worlds, rolls = [], [], {}
+    C = np.array(cam['world'])
+    Rc = C[:3, :3] / np.linalg.norm(C[:3, :3], axis=0)
+    g = np.arange(-SHOULDER_RANGE, SHOULDER_RANGE + 1e-9, SHOULDER_STEP)
+    moves = np.array([Rc @ np.array([x, y, z]) for x in g for y in g for z in g])
+    phis = np.arange(-LIMIT, LIMIT + 1e-6, 20.0)
+    poses = [rigs[0].sk.pose(b) for b in basis]
+    keys = sorted(set(range(0, T, SHOULDER_EVERY)) | {T - 1})
+    out = {}
     for rig in rigs:
-        fa = rig.forearm
-        if fa is None:
+        side, fa = rig.hand.side, rig.forearm
+        if fa is None or side not in masks:
             continue
-        sk = rig.sk
-        upper = rig.dump['bones'][sk.index[fa['name']]]['parent']
-        P0u, P0f = rig.pose0[upper], rig.pose0[fa['name']]
-        hand = sk.index[rig.hand.hand]
-        phis = angles.get(rig.hand.side, np.zeros(T))
-        Wu, Wf, roll = np.zeros((T, 4, 4)), np.zeros((T, 4, 4)), np.zeros(T)
-        for t in range(T):
-            pose = sk.pose(basis[t])
-            Hm = pose[hand]
-            Hr = Hm[:3, :3] / np.linalg.norm(Hm[:3, :3], axis=0)
-            s, e, wr = chain(rig, pose, phis[t])
-            Wu[t], Wf[t] = _aim(P0u, s, e), _aim(P0f, e, wr)
-            Ff = Wf[t][:3, :3] / np.linalg.norm(Wf[t][:3, :3], axis=0)
-            q = Rotation.from_matrix(Ff.T @ Hr @ fa['rel0'].T).as_quat()
-            twist = (2 * np.arctan2(q[1], q[3]) + np.pi) % (2 * np.pi) - np.pi
-            Wf[t][:3, :3] = Rotation.from_rotvec(Ff[:, 1] * twist).as_matrix() @ Wf[t][:3, :3]
-            roll[t] = np.degrees(twist)
-        names += [upper, fa['name']]
-        worlds += [Wu, Wf]
-        rolls[rig.hand.side] = roll
+        L = (fa['L1'] + fa['L2']) * fp_twist.REACH
+        prev, at = np.zeros(3), []
+        for t in keys:
+            m = _down(masks[side][t])
+            keep = ~hand_zone(rig, poses[t], cam, m.shape)
+            target = m & keep
+            if target.sum() < SEEN:
+                at.append(prev)
+                continue
+            wr = poses[t][rig.sk.index[rig.hand.hand]][:3, 3]
+            scores = np.full(len(moves), -1.0)
+            for i, d in enumerate(moves):
+                if np.linalg.norm(wr - fa['shoulder'] - d) > L:
+                    continue  # the hand must stay in reach
+                scores[i] = max(iou(capsules(_arm_segs(rig, poses[t], phi, SHOULDER_THICK, d), cam, m.shape) & keep, target)
+                                for phi in phis)
+            good = scores >= scores.max() - SHOULDER_SLACK
+            cost = np.linalg.norm(moves - prev, axis=1) + 0.5 * np.linalg.norm(moves, axis=1)
+            prev = moves[np.where(good, cost, np.inf).argmin()]
+            at.append(prev)
+        at = np.array(at)
+        path = np.stack([np.interp(np.arange(T), keys, at[:, j]) for j in range(3)], 1)
+        out[side] = one_euro(path, np.zeros(T), fps, SHOULDER_CUTOFF, 0) if T > 2 else path
         if log:
-            log(f'{rig.hand.side.lower()} forearm roll (with elbow swing): median {np.median(np.abs(roll)):.0f} deg, '
-                f'max {np.abs(roll).max():.0f} deg')
-    return np.array(names), (np.stack(worlds, 1) if worlds else np.zeros((T, 0, 4, 4))), rolls
+            n = np.linalg.norm(out[side], axis=1)
+            log(f'{side.lower()} shoulder: moved median {np.median(n) * 100:.0f} cm, max {n.max() * 100:.0f} cm (fitted to its mask)')
+    return out
