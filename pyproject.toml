@@ -5,9 +5,10 @@ description = "Type an action, get it on your own rigged character: MiniMax H3 v
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
-# Runs in ComfyUI's Python with what ComfyUI already ships (numpy, scipy, torch, av, Pillow).
+# Runs in ComfyUI's Python with what ComfyUI already ships (numpy, scipy, torch, av, Pillow), plus OpenCV for
+# first-person prop tracking (point tracking + PnP).
 # GEM runs in its own environment, which the MotionBridge Setup node builds.
-dependencies = ["numpy", "scipy"]
+dependencies = ["numpy", "scipy", "opencv-python-headless"]
 
 [tool.comfy]
 PublisherId = ""

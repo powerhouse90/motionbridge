@@ -1,15 +1,16 @@
 """Drive the first-person graph through ComfyUI's API: Setup -> Load FP Scene -> Load Video ->
-Track FP Hands -> Export FP Animation. python tests/fp_comfy_e2e.py URL SCENE_IN_INPUT VIDEO_IN_INPUT"""
+Track FP Hands -> Export FP Animation. python tests/fp_comfy_e2e.py URL SCENE_IN_INPUT VIDEO_IN_INPUT [W H ACTION PROP PIPELINE]"""
 import json, sys, time, urllib.request
 url, scene, video = sys.argv[1:4]
 W, H = (int(v) for v in sys.argv[4:6]) if len(sys.argv) > 5 else (1280, 720)
 ACTION = sys.argv[6] if len(sys.argv) > 6 else 'grab'
 PROP = sys.argv[7] if len(sys.argv) > 7 else ''
+PIPELINE = sys.argv[8] if len(sys.argv) > 8 else 'classic'
 g = {
     'setup': {'class_type': 'MotionBridgeSetup', 'inputs': {'accept_licenses': True, 'blender': 'use installed, else download'}},
     'scene': {'class_type': 'MotionBridgeLoadFPScene', 'inputs': {'scene_file': scene, 'width': W, 'height': H, 'capture_mode': True, 'main_prop': PROP, 'setup': ['setup', 0]}},
     'video': {'class_type': 'LoadVideo', 'inputs': {'file': video}},
-    'track': {'class_type': 'MotionBridgeTrackFPHands', 'inputs': {'fp_scene': ['scene', 0], 'video': ['video', 0], 'fps': 24.0, 'smoothing': 0.7, 'hands': 'both'}},
+    'track': {'class_type': 'MotionBridgeTrackFPHands', 'inputs': {'fp_scene': ['scene', 0], 'video': ['video', 0], 'fps': 24.0, 'smoothing': 0.7, 'hands': 'both', 'pipeline': PIPELINE}},
     'export': {'class_type': 'MotionBridgeExportFP', 'inputs': {'fp_motion': ['track', 0], 'filename_prefix': 'motionbridge/fp_test',
                                                                 'action_name': ACTION, 'glb': True, 'preview': 'side by side'}},
 }

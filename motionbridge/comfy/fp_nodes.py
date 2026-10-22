@@ -363,7 +363,8 @@ class TrackFPHands(io.ComfyNode):
             raise ValueError('Connect images or a video.')
         scene = Path(fp_scene['folder'])
         sample = hashlib.sha256((images[::3, ::4, ::4].cpu().numpy() * 255).astype(np.uint8).tobytes()).hexdigest()
-        folder = output_folder('fp_motion', digest(sample, list(images.shape), fps, scene.name))
+        # the tracked prop is part of the key: the extraction masks it, so a run with another prop can't reuse it
+        folder = output_folder('fp_motion', digest(sample, list(images.shape), fps, scene.name, fp_scene.get('prop')))
         dump = json.loads((scene / 'rig.json').read_text())
         W, H = images.shape[2], images.shape[1]
         if abs(W / H / (dump['W'] / dump['H']) - 1) > 0.06:  # H3 rounds sizes to multiples of 32; the camera absorbs that

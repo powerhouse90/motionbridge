@@ -40,6 +40,14 @@ def main():
     names, basis = [str(n) for n in d['names']], d['basis'][-a.frames:]
     rig = next(o for o in bpy.context.scene.objects if o.type == 'ARMATURE' and all(n in o.pose.bones for n in names))
     rig.animation_data_clear()
+    arms = [str(n) for n in d['arm_names']] if 'arm_names' in d.files else []
+    for pb in rig.pose.bones:  # an IK chain over a rolled arm would put the forearm back without its roll
+        for c in pb.constraints:
+            if c.type == 'IK':
+                chain = [pb] + list(pb.parent_recursive)
+                chain = chain[:c.chain_count] if c.chain_count else chain
+                if any(b.name in arms for b in chain):
+                    c.mute = True
     for i, n in enumerate(names):
         pb = rig.pose.bones[n]
         pb.rotation_mode = 'QUATERNION'

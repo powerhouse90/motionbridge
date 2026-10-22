@@ -310,7 +310,8 @@ def track_hand(rig, items, motions, kp2d, kp3d, arm_masks, cam, log=print, progr
         if np.isnan(kp2d[t]).all():
             params[t] = prev
             continue
-        depth = np.min([it.depth_map(M[t], cam, C[:3, 3], forward) for it, M in zip(items, motions)], axis=0)
+        maps = [it.depth_map(M[t], cam, C[:3, 3], forward) for it, M in zip(items, motions)]
+        depth = np.min(maps, axis=0) if maps else np.full(arm_masks[t][::q, ::q].shape, np.inf)  # no prop: nothing in front
         seen_arm = arm_masks[t][::q, ::q][:depth.shape[0], :depth.shape[1]]
         uv = np.nanmedian(to_hand21(kp2d[t]), axis=0)
         span = np.linalg.norm(uv[0] - uv[12])
