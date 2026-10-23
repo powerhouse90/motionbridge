@@ -303,12 +303,14 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             final = fp_track.settle_contacts(rigs, prop, smoothed, final, None, cam, log=log)
     else:
         final = list(params)
-    if prop is not None:
-        # a hold lasts through what the video can't show: off screen or misread, the hand stays on its grip
-        for i, (rig, E) in enumerate(zip(rigs, errs)):
-            side = rig.hand.side
-            rel = fp_hold.reliability(ex[f'kp2d_{side}'], E, cam['W'], cam['H'])
-            final[i], _ = fp_hold.hold_lock(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam, log=lines.append)
+    # what the video can't show: a held hand stays on its grip, a free one is bridged between its good frames
+    for i, (rig, E) in enumerate(zip(rigs, errs)):
+        side = rig.hand.side
+        rel = fp_hold.reliability(ex[f'kp2d_{side}'], E, cam['W'], cam['H'])
+        spans = []
+        if prop is not None:
+            final[i], spans = fp_hold.hold_lock(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam, log=lines.append)
+        final[i] = fp_hold.bridge(rig, final[i], rel, spans, log=lines.append)
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)
     if roll:

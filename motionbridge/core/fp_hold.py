@@ -104,3 +104,36 @@ def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, l
             log(f'{rig.hand.side.lower()} hand holds the prop over frames {a}-{b - 1} ({unseen} of them unreliable: '
                 f'kept on its grip there)')
     return P, spans
+
+
+def bridge(rig, params, rel, spans, log=print):
+    """A free hand the video can't follow (off screen, misread) outside any hold: across each run of unreliable
+    frames the hand goes smoothly from its last reliable pose to its next one (hand frame and fingers
+    interpolated), replacing the reading by how unreliable the frame is. No reliable frame after: it keeps its
+    last one; none before: it eases from the next one. Returns params."""
+    P = params.copy()
+    T, k = len(P), rig.na + 3
+    held = np.zeros(T, bool)
+    for a, b in spans:
+        held[a:b] = True
+    bad = (rel < TRUST) & ~held
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    for a, b in ev._runs(bad):
+        before, after = a - 1, b  # the reliable (or held) frames around the gap
+        if before < 0 and after >= T:
+            continue  # never seen well: nothing better to go on
+        A = Hf[before] if before >= 0 else Hf[after]
+        B = Hf[after] if after < T else Hf[before]
+        fa = params[before, k:] if before >= 0 else params[after, k:]
+        fb = params[after, k:] if after < T else params[before, k:]
+        n = b - a + 1
+        for t in range(a, b):
+            s = (t - a + 1) / n
+            s = s * s * (3 - 2 * s)
+            w = 1 - rel[t]
+            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], fp._blend(A, B, s), w))
+            P[t, k:] = (1 - w) * params[t, k:] + w * ((1 - s) * fa + s * fb)
+        if log:
+            log(f'{rig.hand.side.lower()} hand not held and not readable over frames {a}-{b - 1}: bridged between its '
+                f'poses at frames {before if before >= 0 else after} and {after if after < T else before}')
+    return P
