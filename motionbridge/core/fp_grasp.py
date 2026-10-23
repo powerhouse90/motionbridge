@@ -366,7 +366,15 @@ def smoothed_observations(obs, cut=OBS_CUT):
     T = len(obs)
     if T < 3:
         return list(obs)
-    lp = lambda v: fp.one_euro(v.reshape(T, -1), np.zeros(T), fp.FPS, cut, 0).reshape(v.shape)
+
+    def lp(v):  # frames without a reading (the hand off screen) are filled from their neighbours first
+        f = v.reshape(T, -1).astype(float).copy()
+        ok = np.isfinite(f).all(1)
+        if ok.sum() < 2:
+            return v
+        for j in range(f.shape[1]):
+            f[~ok, j] = np.interp(np.flatnonzero(~ok), np.flatnonzero(ok), f[ok, j])
+        return fp.one_euro(f, np.zeros(T), fp.FPS, cut, 0).reshape(v.shape)
     uv = lp(np.array([o[0] for o in obs]))
     span = lp(np.array([[o[1]] for o in obs]))[:, 0]
     d = lp(np.array([o[2] for o in obs]))
@@ -387,7 +395,9 @@ def grasp_take(rigs, prop, motion, kp2d, kp3d, params, cam, workers=8, strength=
     obs = [[fp.observation(r, kp2d[i][t], kp3d[i][t], cam) for t in range(T)] for i, r in enumerate(rigs)]
     obs_smooth = [smoothed_observations(o) for o in obs]
     state = {'rigs': rigs, 'prop': prop, 'motion': motion, 'obs': obs, 'obs_smooth': obs_smooth, 'cam': cam}
-    held = [[t for t in range(T) if holds(r, params[i][t], prop, motion[t], cam)] for i, r in enumerate(rigs)]
+    read = lambda o: all(np.isfinite(np.asarray(q, float)).all() for q in o)
+    # frames without a reading of the hand have nothing to match: fp_hold keeps them on the grip or bridges them
+    held = [[t for t in range(T) if read(obs[i][t]) and holds(r, params[i][t], prop, motion[t], cam)] for i, r in enumerate(rigs)]
     if log:
         log('holding the prop: ' + ', '.join(f'{r.hand.side.lower()} hand {len(h)} of {T} frames' for r, h in zip(rigs, held)))
     modes1 = [steady_modes({t: finger_modes(r, params[i][t], prop, motion[t], cam, obs[i][t]) for t in held[i]})
