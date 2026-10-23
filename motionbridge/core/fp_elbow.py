@@ -104,6 +104,24 @@ def _arm_segs(rig, pose, phi, k, off=None):
     return [(s, e, r * TAPER[0], r * TAPER[1]), (e, w, r * TAPER[1], r * TAPER[2])]
 
 
+STRAIGHT = 0.25        # cost per radian the wrist bends away from how it sat on the forearm at the start: a real
+                       # wrist stays fairly straight, so where the mask shows little arm the arm lines up with the hand
+
+
+def bend(rig, pose, phi, off=None):
+    """How far (rad) the wrist bends, the forearm from the shoulder solve against the hand, relative to the start pose."""
+    fa = rig.forearm
+    s, e, w = chain(rig, pose, phi, off)
+    f = (w - e) / np.linalg.norm(w - e)
+    h = pose[rig.sk.index[rig.hand.hand]][:3, 1]
+    h = h / np.linalg.norm(h)
+    if 'bend0' not in fa:
+        h0 = rig.pose0[rig.hand.hand][:3, 1] / np.linalg.norm(rig.pose0[rig.hand.hand][:3, 1])
+        f0 = rig.pose0[rig.hand.hand][:3, 3] - fa['elbow0']
+        fa['bend0'] = float(np.arccos(np.clip(h0 @ (f0 / np.linalg.norm(f0)), -1, 1)))
+    return abs(float(np.arccos(np.clip(f @ h, -1, 1))) - fa['bend0'])
+
+
 def iou(a, b):
     u = (a | b).sum()
     return (a & b).sum() / u if u else 1.0
@@ -132,6 +150,7 @@ def fit_elbows(rigs, basis, masks, cam, fps=24, log=print, offset=None):
         k = max(THICK, key=lambda k: np.mean([max(score(t, phi, k) for phi in coarse) for t in calib])) if calib else THICK[len(THICK) // 2]
         w = np.minimum(seen / SEEN, 1.0)[:, None]
         unary = w * np.array([[1 - score(t, phi, k) for phi in grid] for t in range(T)]) + PRIOR * (grid / LIMIT) ** 2
+        unary += STRAIGHT * np.array([[bend(rig, poses[t], phi, off[t]) for phi in grid] for t in range(T)])
         # Viterbi: best swing path, change between frames costs SMOOTH per (deg/frame)^2 / 100
         jump = SMOOTH * ((grid[:, None] - grid[None, :]) / 10) ** 2
         cost, back = unary[0].copy(), np.zeros((T, len(grid)), int)
@@ -197,9 +216,7 @@ def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print):
             m = _down(masks[side][t])
             keep = ~hand_zone(rig, poses[t], cam, m.shape)
             target = m & keep
-            if target.sum() < SEEN:
-                at.append(prev)
-                continue
+            seen = min(target.sum() / SEEN, 1.0)  # how much the mask can say
             wr = poses[t][rig.sk.index[rig.hand.hand]][:3, 3]
 
             def pick(moves, phis, best=None):
@@ -207,8 +224,8 @@ def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print):
                 for i, d in enumerate(moves):
                     if np.linalg.norm(wr - fa['shoulder'] - d) > L:
                         continue  # the hand must stay in reach
-                    scores[i] = max(iou(capsules(_arm_segs(rig, poses[t], phi, SHOULDER_THICK, d), cam, m.shape) & keep, target)
-                                    for phi in phis)
+                    scores[i] = max(seen * iou(capsules(_arm_segs(rig, poses[t], phi, SHOULDER_THICK, d), cam, m.shape) & keep, target)
+                                    - STRAIGHT * bend(rig, poses[t], phi, d) for phi in phis)
                 top = max(scores.max(), best or -1.0)
                 good = scores >= top - SHOULDER_SLACK
                 cost = np.linalg.norm(moves - prev, axis=1) + 0.5 * np.linalg.norm(moves, axis=1)

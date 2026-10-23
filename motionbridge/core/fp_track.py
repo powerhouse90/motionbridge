@@ -46,6 +46,7 @@ STEP_FINGER = 0.3     # rad per frame
 PLACEMENT = {'control': {'prior': 0.15, 'step': 0.015},  # m: hand control offset from the start / per frame
              'arm': {'prior': 1.5, 'step': 0.15}}       # rad: arm turn from the start / per frame
 DEPTH_MAP_SCALE = 4   # item depth map at 1/4 resolution
+FINGER_SMOOTH = 0.35  # fingers get this share of the hand's smoothing strength
 WRIST_TWIST = 25.0    # deg: the hand may turn this much about the forearm (the forearm rolls for more)
 WRIST_BEND = 75.0     # deg: and bend this much against it
 
@@ -407,11 +408,12 @@ def smooth_hand(rig, items, motions, smoothed, params, strength=0.7, log=print):
     filt = _filter()
     T, k = len(params), rig.na + 3
     min_cut, beta_rot, beta_pos = settings(strength)
+    finger_cut = settings(strength * FINGER_SMOOTH)[0]  # fingers smoothed less: taps and clicks are quick, small moves
     xs = params.copy()
-    groups = [(slice(0, rig.na), beta_pos if rig.mode == 'control' else beta_rot), (slice(rig.na, k), beta_rot)]
-    groups += [(slice(k + 4 * i, k + 4 * i + 4), beta_rot) for i in range(len(rig.hand.fingers))]
-    for sl, beta in groups:
-        xs[:, sl] = filt(params[:, sl], min_cut, beta)
+    groups = [(slice(0, rig.na), beta_pos if rig.mode == 'control' else beta_rot, min_cut), (slice(rig.na, k), beta_rot, min_cut)]
+    groups += [(slice(k + 4 * i, k + 4 * i + 4), beta_rot, finger_cut) for i in range(len(rig.hand.fingers))]
+    for sl, beta, cut in groups:
+        xs[:, sl] = filt(params[:, sl], cut, beta)
     out = np.clip(xs, rig.lo, rig.hi)
     if not items:
         return out
