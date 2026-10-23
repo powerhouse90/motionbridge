@@ -21,6 +21,10 @@ TRUST = 0.5        # reliability needed for a frame to start or end a hold
 SETTLED = 0.7      # reliability of the frames a hold's settled pose is taken from
 CUTOFF = 2.0       # Hz: reliability is low-passed so the lock doesn't flicker
 FLOOR = 0.15       # the lock's pull on a fully visible hand: enough to stop slip, not to override the video
+UNSEEN_ON = 0.5    # a locked hand this much on screen ...
+UNSEEN_MASK = 0.2  # ... with this little of it on the video's arm mask is contradicted: the hand isn't there
+EDGE = 0.15        # share of the frame: a hand lost this close to an edge left through it
+PAST = 0.3         # hand spans: a bridged hand goes this far past the edge it left through
 APART = 0.3        # hand spans: the read palm this far from the prop on screen has let go (depth can't say so:
                    # one camera reads it badly, so a hand drifting off the prop only in depth still holds)
 
@@ -55,17 +59,21 @@ def apart(kp2d, prop, motion, cam, T):
     return out
 
 
-def holds(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS):
+def holds(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, block=None):
     """[(start, end)] of the hand's holds: started and ended on reliable frames only (hysteresis as fp_events),
     carried through unreliable ones. With the read (kp2d, cam), a hold ends only when the hand also leaves the
-    prop on screen."""
+    prop on screen. block: (T,) frames the video contradicts a hold on: it ends there, and only a reliable frame
+    can start one again."""
     c = ev.contacts(ev.hand_points(rig, params), prop, motion)
     score, wrapped = ev.hold_score(c), c['wrapped']
     T = len(params)
     away = apart(kp2d, prop, motion, cam, T) if kp2d is not None else np.ones(T, bool)
     on, spans, start = False, [], 0
     for t in range(T):
-        if rel[t] >= TRUST:
+        if on and block is not None and block[t]:
+            on = False
+            spans.append((start, t))
+        elif rel[t] >= TRUST:
             if not on and score[t] >= ev.HOLD_ON and wrapped[t] >= ev.MIN_WRAP:
                 on, start = True, t
             elif on and score[t] < ev.HOLD_OFF and away[t]:
@@ -77,19 +85,54 @@ def holds(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS):
     return [(a, b) for a, b in spans if b - a >= n]
 
 
-def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, log=print):
+def _settled(rig, params, motion, rel, Hf, a, b):
+    """A hold's settled pose on the prop and finger grip, from its reliable frames."""
+    k = rig.na + 3
+    good = [t for t in range(a, b) if rel[t] >= SETTLED] or [a]
+    return ev.mean_pose(np.linalg.inv(motion[good]) @ Hf[good]), np.median(params[good, k:], axis=0)
+
+
+def contradicted(rig, params, motion, rel, spans, masks, cam):
+    """(T,) bool: unreliable frames inside a hold where the hand, put at its grip, would be on screen but the
+    video's arm mask shows no hand there (a hand that went off with a part of the prop, e.g. a magazine)."""
+    T = len(params)
+    out = np.zeros(T, bool)
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    H, W = masks.shape[1:]
+    for a, b in spans:
+        ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
+        for t in range(a, b):
+            if rel[t] >= TRUST:
+                continue
+            x = fp._place_hand(rig, params[t], motion[t] @ ref)
+            x[rig.na + 3:] = fingers
+            uv = project(rig.keypoints(x), cam) * [W / cam['W'], H / cam['H']]
+            on = (uv[:, 0] >= 0) & (uv[:, 0] < W) & (uv[:, 1] >= 0) & (uv[:, 1] < H)
+            if on.mean() >= UNSEEN_ON:
+                q = uv[on].astype(int)
+                out[t] = masks[t][q[:, 1], q[:, 0]].mean() < UNSEEN_MASK
+    return out
+
+
+def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, log=print, masks=None):
     """params with each hold kept: the hand pulled to its settled pose on the prop (taken from the hold's
     reliable frames) by 1 - reliability (at least FLOOR), eased in and out at the hold's ends; the fingers
-    likewise toward their settled grip. Returns (params, spans)."""
+    likewise toward their settled grip. With the arm masks, a hold the video contradicts ends there
+    (contradicted()). Returns (params, spans)."""
     P = params.copy()
     T, k = len(P), rig.na + 3
     spans = holds(rig, params, prop, motion, rel, kp2d, cam, fps)
+    if masks is not None and cam is not None:
+        block = contradicted(rig, params, motion, rel, spans, masks, cam)
+        if block.any():
+            spans = holds(rig, params, prop, motion, rel, kp2d, cam, fps, block)
+            if log:
+                log(f"{rig.hand.side.lower()} hand: the video contradicts its hold on {int(block.sum())} frames "
+                    f"(no hand where its grip would put it): let go there")
     Hf = np.array([rig.hand_frame(x) for x in params])
     n = ev._frames(ev.EASE, fps)
     for a, b in spans:
-        good = [t for t in range(a, b) if rel[t] >= SETTLED] or [a]
-        ref = ev.mean_pose(np.linalg.inv(motion[good]) @ Hf[good])
-        fingers = np.median(params[good, k:], axis=0)
+        ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
         edge = np.ones(b - a)
         if a > 0:
             edge[:n] = np.minimum(edge[:n], ev._ramp(n)[:b - a])
@@ -106,11 +149,35 @@ def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, l
     return P, spans
 
 
-def bridge(rig, params, rel, spans, log=print):
+def _past_edge(rig, x, cam):
+    """The hand frame of x moved across the view (at its depth) to just past the frame edge it is nearest, if it
+    is within EDGE of one; else None."""
+    p = rig.keypoints(x)
+    uv = project(p, cam)
+    pc = uv[[0, 5, 9, 13, 17]].mean(0)
+    W, H = cam['W'], cam['H']
+    gaps = {'left': pc[0], 'right': W - pc[0], 'top': pc[1], 'bottom': H - pc[1]}
+    side = min(gaps, key=gaps.get)
+    if gaps[side] > EDGE * (W if side in ('left', 'right') else H):
+        return None
+    span = np.linalg.norm(uv[0] - uv[12])
+    C = np.array(cam['world'])
+    R = C[:3, :3] / np.linalg.norm(C[:3, :3], axis=0)
+    depth = (p[[0, 5, 9, 13, 17]].mean(0) - C[:3, 3]) @ -R[:, 2]
+    focal = cam['lens'] / cam['sensor'] * W
+    metres = (max(gaps[side], 0) + PAST * span) * depth / focal
+    move = {'left': -R[:, 0], 'right': R[:, 0], 'top': R[:, 1], 'bottom': -R[:, 1]}[side] * metres
+    Hf = rig.hand_frame(x).copy()
+    Hf[:3, 3] += move
+    return Hf
+
+
+def bridge(rig, params, rel, spans, log=print, cam=None):
     """A free hand the video can't follow (off screen, misread) outside any hold: across each run of unreliable
     frames the hand goes smoothly from its last reliable pose to its next one (hand frame and fingers
     interpolated), replacing the reading by how unreliable the frame is. No reliable frame after: it keeps its
-    last one; none before: it eases from the next one. Returns params."""
+    last one; none before: it eases from the next one. With the camera, a hand lost near a frame edge goes out
+    past it on the way (and comes back in from it), as a hand that left the frame did. Returns params."""
     P = params.copy()
     T, k = len(P), rig.na + 3
     held = np.zeros(T, bool)
@@ -126,14 +193,31 @@ def bridge(rig, params, rel, spans, log=print):
         B = Hf[after] if after < T else Hf[before]
         fa = params[before, k:] if before >= 0 else params[after, k:]
         fb = params[after, k:] if after < T else params[before, k:]
+        E = None
+        if cam is not None:
+            E = _past_edge(rig, params[before], cam) if before >= 0 else None
+            if E is None and after < T:
+                E = _past_edge(rig, params[after], cam)
         n = b - a + 1
         for t in range(a, b):
             s = (t - a + 1) / n
-            s = s * s * (3 - 2 * s)
+            if E is None:
+                path = fp._blend(A, B, s * s * (3 - 2 * s))
+            elif after >= T:  # out through the edge, not back
+                u = min(2 * s, 1.0)
+                path = fp._blend(A, E, u * u * (3 - 2 * u))
+            elif before < 0:
+                u = max(2 * s - 1, 0.0)
+                path = fp._blend(E, B, u * u * (3 - 2 * u))
+            else:
+                u = 2 * s if s < 0.5 else 2 * s - 1
+                u = u * u * (3 - 2 * u)
+                path = fp._blend(A, E, u) if s < 0.5 else fp._blend(E, B, u)
             w = 1 - rel[t]
-            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], fp._blend(A, B, s), w))
+            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], path, w))
             P[t, k:] = (1 - w) * params[t, k:] + w * ((1 - s) * fa + s * fb)
         if log:
             log(f'{rig.hand.side.lower()} hand not held and not readable over frames {a}-{b - 1}: bridged between its '
-                f'poses at frames {before if before >= 0 else after} and {after if after < T else before}')
+                f'poses at frames {before if before >= 0 else after} and {after if after < T else before}'
+                + (' (out past the frame edge it left through)' if E is not None else ''))
     return P
