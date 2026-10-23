@@ -302,3 +302,26 @@ def outline_correct(motion, tris, prop_masks, arm_masks, cam, fps=24, log=print,
             f'(IoU {np.mean([r[1] for r in fixed]):.2f} -> {np.mean([r[2] for r in fixed]):.2f})' if fixed else
             f'prop outline check: the points agree with the outline')
     return out, rows
+
+
+VIEW_STILL = 0.004     # m / rad: scenery moving less than this (rms over the take) is a still camera; left alone
+
+
+def solve_view(frames, scenery_tris, exclude, cam, log=print, progress=None):
+    """The camera's motion, from the scenery that doesn't move (every prop but the tracked one: a desk, a
+    keyboard): points followed on it as track_points follows a prop, anywhere but on the arms and the tracked prop
+    (exclude: (T, H, W) bool); the scenery's apparent motion is the camera's, inverted. Returns (view (T, 4, 4):
+    the camera's world motion relative to frame 0 (apply as view @ camera, view @ anything seen from it), err,
+    held), or None for a still camera."""
+    T = len(frames)
+    everywhere = np.ones((T,) + exclude.shape[1:], bool)
+    M, err, held, _ = track_points(frames, everywhere & ~exclude, exclude, cam, tris=scenery_tris, log=None, progress=progress)
+    from scipy.spatial.transform import Rotation
+    move = np.sqrt(np.mean(np.sum((M[:, :3, 3] - M[0, :3, 3]) ** 2, axis=1)))
+    turn = np.sqrt(np.mean(Rotation.from_matrix(M[:, :3, :3]).magnitude() ** 2))
+    if log:
+        log(f'camera from the still scenery: moved {move * 100:.1f} cm, turned {np.degrees(turn):.1f} deg (rms); '
+            f'{np.nanmedian(err):.1f} px, fewest points {int(held.min())}')
+    if move < VIEW_STILL and turn < VIEW_STILL:
+        return None
+    return np.linalg.inv(M), err, held

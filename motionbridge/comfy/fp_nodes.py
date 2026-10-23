@@ -339,10 +339,33 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             h = np.array(holding[i])
             line += f'; holds the prop on {int((h > 0).sum())} frames, 4+ fingers on {int((h >= 4).sum())}'
         lines.append(line)
-    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__), Path(fp_elbow.__file__), Path(fp_hold.__file__))}.npz'
+    # the camera: H3 may move it though asked not to; the props left as placed (a desk, a keyboard) don't move, so
+    # their apparent motion is the camera's. The export moves the camera, and the arms and the prop seen from it.
+    view = None
+    scenery = [np.load(scene / it['tris']) for j, it in enumerate(dump['items']) if j != k and it.get('tris')]
+    if scenery:
+        vcache = folder / f'view_{digest(Path(fp_points.__file__), k)}.npz'
+        if vcache.exists():
+            c = np.load(vcache)
+            view = c['view'] if c['moved'] else None
+        else:
+            from scipy import ndimage
+            frames = [cv2.imread(str(p)) for p in sorted(Path(frames_dir).glob('*.jpg'))]
+            exclude = np.zeros(ex[f'arm_{rigs[0].hand.side}'].shape, bool)
+            for r in rigs:
+                exclude |= ex[f'arm_{r.hand.side}']
+            if prop is not None:
+                exclude |= np.array([ndimage.binary_dilation(m, iterations=6) for m in ex['item_0']])
+            res = fp_points.solve_view(frames, np.concatenate(scenery), exclude, cam, log=lines.append)
+            view = res[0] if res else None
+            np.savez(vcache, view=view if view is not None else np.eye(4)[None], moved=view is not None)
+        if view is not None:
+            lines.append('camera moved in the video: solved from the props left as placed; the export moves the camera')
+    track = folder / f'track_{sides}_{digest(raw_file.name, grasp, roll, smoothing, Path(fp_grasp.__file__), Path(fp_twist.__file__), Path(fp_elbow.__file__), Path(fp_hold.__file__), Path(fp_points.__file__))}.npz'
     np.savez(track, names=np.array(rigs[0].names), basis=basis, arm_names=arm_names,
              items=np.array([smoothed]) if prop is not None else np.zeros((0, T, 4, 4)),
-             item_roots=np.array([dump['items'][k]['root']] if prop is not None else []))
+             item_roots=np.array([dump['items'][k]['root']] if prop is not None else []),
+             **({'view': view} if view is not None else {}))
     return track, lines
 
 

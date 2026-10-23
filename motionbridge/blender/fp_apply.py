@@ -54,7 +54,25 @@ def main():
         root.animation_data_create()
         root.animation_data.action = bpy.data.actions.new(f'{a.action}_{root.name}')
         root.rotation_mode = 'QUATERNION'
+    # a camera the video moved (solved from the still scenery): the camera, and the arms and the tracked prop it
+    # was seen from, ride on it; the scenery stays put
+    view = d['view'] if 'view' in d.files else None
+    if view is not None:
+        cam = scene.camera
+        cam0, rig0 = cam.matrix_world.copy(), rig.matrix_world.copy()
+        for o in (cam, rig):
+            o.rotation_mode = 'QUATERNION'
+        cam.animation_data_create()
+        cam.animation_data.action = bpy.data.actions.new(f'{a.action}_camera')
     for t in range(T):
+        if view is not None:
+            V = Matrix(view[t].tolist())
+            cam.matrix_world = V @ cam0
+            cam.keyframe_insert('location', frame=t + 1)
+            cam.keyframe_insert('rotation_quaternion', frame=t + 1)
+            rig.matrix_world = V @ rig0
+            rig.keyframe_insert('location', frame=t + 1)
+            rig.keyframe_insert('rotation_quaternion', frame=t + 1)
         for i in moving:
             pb = rig.pose.bones[names[i]]
             pb.rotation_mode = 'QUATERNION'
@@ -62,7 +80,7 @@ def main():
             pb.keyframe_insert('location', frame=t + 1)
             pb.keyframe_insert('rotation_quaternion', frame=t + 1)
         for root, M in zip(roots, items):
-            root.matrix_world = Matrix(M[t].tolist())
+            root.matrix_world = Matrix(((view[t] @ M[t]) if view is not None else M[t]).tolist())
             root.keyframe_insert('location', frame=t + 1)
             root.keyframe_insert('rotation_quaternion', frame=t + 1)
     scene.frame_set(1)
