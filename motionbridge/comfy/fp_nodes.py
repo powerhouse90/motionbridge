@@ -265,11 +265,27 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             motion, err, held, _ = fp_points.track_points(frames, ex['item_0'], arms, cam, tris=tris, item=prop, log=log,
                                                           progress=lambda i, n: progress('prop', i, n, 'following points on the main prop'))
             np.savez(cache, motion=motion, err=err, held=held)
+        if tris is not None:
+            # the outline check: where the posed prop disagrees with its mask, refit to it (points bunched on one
+            # part can read a prop coming closer as one turning)
+            ocache = folder / f'prop_outline_{digest(Path(fp_points.__file__), cache.name, see_through)}.npz'
+            if ocache.exists():
+                motion = np.load(ocache)['motion']
+            else:
+                frames = [cv2.imread(str(p)) for p in sorted(Path(frames_dir).glob('*.jpg'))]
+                arms = np.zeros(ex['item_0'].shape, bool)
+                for r in rigs:
+                    arms |= ex[f'arm_{r.hand.side}']
+                motion, _ = fp_points.outline_correct(motion, tris, ex['item_0'], arms, cam, log=lines.append,
+                                                      frames=frames if see_through else None,
+                                                      progress=lambda i, n: progress('prop', i, n, 'checking the main prop against its outline'))
+                np.savez(ocache, motion=motion)
         smoothed = fp_track.smooth_items([prop], [motion], smoothing)[0] if smoothing > 0 else motion
         lines.append(f'main prop from points on its texture{"" if tris is not None else " (no triangles in the scene: ray-marched its signed distance)"}: '
                      f'{np.nanmedian(err):.1f} px off the video (median), fewest points held {int(held.min())}')
     props = [prop] if prop is not None else []
-    raw_file = folder / f'raw_points_{sides}_{digest(Path(fp_track.__file__), see_through, smoothing if prop is not None else 0, tris is not None)}.npz'
+    prop_key = (cache.name, ocache.name if tris is not None else '') if prop is not None else ''
+    raw_file = folder / f'raw_points_{sides}_{digest(Path(fp_track.__file__), see_through, smoothing if prop is not None else 0, tris is not None, prop_key)}.npz'
     if raw_file.exists():
         raw = np.load(raw_file)
         params = [raw[f'params_{r.hand.side}'] for r in rigs]

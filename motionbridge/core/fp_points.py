@@ -170,3 +170,135 @@ def track_points(frames, prop_masks, arm_masks, cam, tris=None, item=None, log=p
         if log and (t % 24 == 0 or t == T - 1):
             log(f'prop frame {t}: {held[t]} points held, {err[t]:.1f} px off')
     return motion, err, held, matches
+
+
+# The outline check. Points followed on the texture pin the prop where they sit, but when they bunch on one part
+# of it (the rest hidden, untextured or redrawn), a prop that comes closer can be read as one that turned. The
+# prop's outline (SAM 2's mask) sees all of it: where the posed prop's silhouette disagrees with the mask, the
+# pose is refit to the mask from the points' pose, on every OUTLINE_EVERY-th frame, and the correction is
+# carried smoothly between them.
+OUTLINE_SCALE = 4         # masks compared at 1/OUTLINE_SCALE resolution
+OUTLINE_OK = 0.85         # IoU: the points' pose agrees with the outline; left alone
+OUTLINE_GAIN = 0.05       # IoU: a refit must beat the points' pose by this much to be taken
+OUTLINE_EVERY = 8
+OUTLINE_STARTS = (0.0, -0.05, -0.10, -0.15)  # m along the view: start the refit closer, too (the usual mix-up)
+OUTLINE_CUTOFF = 1.5      # Hz: the correction is low-passed between its frames
+
+
+def silhouette(tris, M, cam, shape, scale=OUTLINE_SCALE):
+    """Boolean mask (shape) of the prop's triangles posed by M (relative to the scene) seen through cam;
+    triangles at or behind the camera are left out."""
+    from motionbridge.core.hand_fit import project
+    C = np.array(cam['world'])
+    fwd = -C[:3, 2] / np.linalg.norm(C[:3, 2])
+    w = tris @ M[:3, :3].T + M[:3, 3]
+    front = ((w - C[:3, 3]) @ fwd > 0.02).all(1)
+    q = (project(w[front].reshape(-1, 3), cam) / scale).reshape(-1, 3, 2)
+    im = np.zeros(shape, np.uint8)
+    cv2.fillPoly(im, list(np.round(q).astype(np.int32)), 1)
+    return im > 0
+
+
+GLOVE_SAT = 90            # capture mode's gloves (orange right, blue left) are saturated and bright, the prop dull:
+GLOVE_VAL = 110           # pixels this saturated and bright in the gloves' hues are hand, whatever SAM's prop mask says
+GLOVE_HUES = ((8, 35), (85, 120))  # OpenCV hue (0-180): orange, blue
+
+
+def glove_mask(frame):
+    """Capture mode: where a glove shows in a BGR frame (closed over small gaps)."""
+    h, s, v = cv2.split(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV))
+    hue = np.zeros(h.shape, bool)
+    for lo, hi in GLOVE_HUES:
+        hue |= (h >= lo) & (h <= hi)
+    g = (s > GLOVE_SAT) & (v > GLOVE_VAL) & hue
+    return cv2.morphologyEx(g.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)) > 0
+
+
+def _outline_targets(mask, arms, scale=OUTLINE_SCALE):
+    """The prop's mask at comparison size, and where it counts: under an arm the prop may be hidden, so it can't
+    say either way."""
+    H, W = mask.shape
+    sz = (W // scale, H // scale)
+    m = cv2.resize(mask.astype(np.uint8), sz, interpolation=cv2.INTER_AREA) > 0
+    a = cv2.resize(arms.astype(np.uint8), sz, interpolation=cv2.INTER_AREA) > 0
+    return m & ~a, ~a
+
+
+def _iou(a, b, care):
+    return (a & b & care).sum() / max(((a | b) & care).sum(), 1)
+
+
+def outline_fit(M0, tris, mask, arms, cam):
+    """The pose near M0 whose silhouette best matches the mask (6 DoF about the prop's centre, Powell from M0
+    and from M0 moved closer). Returns (pose, IoU of M0, IoU of the pose)."""
+    from scipy.optimize import minimize
+    from scipy.spatial.transform import Rotation
+    m, care = _outline_targets(mask, arms)
+    C = np.array(cam['world'])
+    fwd = -C[:3, 2] / np.linalg.norm(C[:3, 2])
+    c0 = tris.reshape(-1, 3).mean(0)
+    c = M0[:3, :3] @ c0 + M0[:3, 3]
+
+    def pose(v):
+        M = np.eye(4)
+        M[:3, :3] = Rotation.from_rotvec(v[:3]).as_matrix() @ M0[:3, :3]
+        M[:3, 3] = c + v[3:] - M[:3, :3] @ c0
+        return M
+
+    cost = lambda v: 1 - _iou(silhouette(tris, pose(v), cam, m.shape), m, care)
+    base = 1 - cost(np.zeros(6))
+    best = None
+    for dz in OUTLINE_STARTS:
+        r = minimize(cost, np.r_[0, 0, 0, fwd * dz], method='Powell', options={'maxiter': 2000, 'xtol': 1e-3, 'ftol': 1e-4})
+        if best is None or r.fun < best.fun:
+            best = r
+    return pose(best.x), base, 1 - best.fun
+
+
+def outline_correct(motion, tris, prop_masks, arm_masks, cam, fps=24, log=print, progress=None, frames=None):
+    """motion with the outline check applied: on every OUTLINE_EVERY-th frame (and the last) whose pose
+    disagrees with the prop's mask, the pose refit to it; the correction (refit relative to the points' pose)
+    carried between those frames and low-passed. frames (capture mode): the gloves' colours are cut from the
+    prop's mask too, where SAM's arm masks missed some hand. Returns (motion, report rows (frame, IoU before,
+    after))."""
+    from scipy.spatial.transform import Rotation
+    T = len(motion)
+    keys = sorted(set(range(0, T, OUTLINE_EVERY)) | {T - 1})
+    delta, rows = [], []
+    for n, t in enumerate(keys):
+        if progress:
+            progress(n + 1, len(keys))
+        shape = (prop_masks[t].shape[0] // OUTLINE_SCALE, prop_masks[t].shape[1] // OUTLINE_SCALE)
+        arms = arm_masks[t] | glove_mask(frames[t]) if frames is not None else arm_masks[t]
+        m, care = _outline_targets(prop_masks[t], arms)
+        base = _iou(silhouette(tris, motion[t], cam, shape), m, care)
+        D = np.eye(4)
+        if m.sum() > 50 and base < OUTLINE_OK:
+            M, base, fit = outline_fit(motion[t], tris, prop_masks[t], arms, cam)
+            if fit > base + OUTLINE_GAIN:
+                D = M @ np.linalg.inv(motion[t])
+            rows.append((t, base, fit))
+        delta.append(D)
+    if all(np.allclose(D, np.eye(4)) for D in delta):
+        return motion, rows
+    rv = np.array([Rotation.from_matrix(D[:3, :3]).as_rotvec() for D in delta])
+    tr = np.array([D[:3, 3] for D in delta])
+    f = np.arange(T)
+    rv = np.stack([np.interp(f, keys, rv[:, j]) for j in range(3)], 1)
+    tr = np.stack([np.interp(f, keys, tr[:, j]) for j in range(3)], 1)
+    if T > 2:
+        from motionbridge.core.smooth import one_euro
+        rv = one_euro(rv, np.zeros(T), fps, OUTLINE_CUTOFF, 0)
+        tr = one_euro(tr, np.zeros(T), fps, OUTLINE_CUTOFF, 0)
+    out = motion.copy()
+    for t in range(T):
+        D = np.eye(4)
+        D[:3, :3] = Rotation.from_rotvec(rv[t]).as_matrix()
+        D[:3, 3] = tr[t]
+        out[t] = D @ motion[t]
+    if log:
+        fixed = [r for r in rows if r[2] > r[1] + OUTLINE_GAIN]
+        log(f'prop outline check: {len(rows)} of {len(keys)} checked frames disagreed with the mask, {len(fixed)} refit '
+            f'(IoU {np.mean([r[1] for r in fixed]):.2f} -> {np.mean([r[2] for r in fixed]):.2f})' if fixed else
+            f'prop outline check: the points agree with the outline')
+    return out, rows
