@@ -252,6 +252,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     if tris is not None:
         prop.points = dense_points(tris)
     motion = smoothed = None
+    scenery = [fp_track.Item(scene / it['file']) for j, it in enumerate(dump['items']) if j != k and it.get('file')]
     if prop is not None:
         cache = folder / f'prop_points_{digest(Path(fp_points.__file__), tris is not None)}.npz'
         if cache.exists():
@@ -266,10 +267,12 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
                                                           progress=lambda i, n: progress('prop', i, n, 'following points on the main prop'))
             np.savez(cache, motion=motion, err=err, held=held)
         smoothed = fp_track.smooth_items([prop], [motion], smoothing)[0] if smoothing > 0 else motion
+        # the props left as placed (a desk, a keyboard) are solid: a prop read too deep is slid out toward the camera
+        smoothed = fp_hold.clear_prop(smoothed, prop, scenery, cam, log=lines.append)
         lines.append(f'main prop from points on its texture{"" if tris is not None else " (no triangles in the scene: ray-marched its signed distance)"}: '
                      f'{np.nanmedian(err):.1f} px off the video (median), fewest points held {int(held.min())}')
     props = [prop] if prop is not None else []
-    prop_key = cache.name if prop is not None else ''  # the hand fit depends on the prop's motion
+    prop_key = (cache.name, digest(Path(fp_hold.__file__))) if prop is not None else ''  # the hand fit depends on the prop's motion
     raw_file = folder / f'raw_points_{sides}_{digest(Path(fp_track.__file__), see_through, smoothing if prop is not None else 0, tris is not None, prop_key)}.npz'
     if raw_file.exists():
         raw = np.load(raw_file)
@@ -317,6 +320,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             grips = fp_hold.known_grips(rig, final[i], prop, smoothed, rel, spans)
             final[i] = fp_hold.reuse_grips(rig, final[i], prop, smoothed, spans, grips, log=lines.append)
         final[i] = fp_hold.bridge(rig, final[i], rel, spans, log=lines.append, cam=cam)
+        final[i] = fp_hold.clear_hand(rig, final[i], scenery, cam, log=lines.append)  # nor a hand through the desk
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)
     if roll:
@@ -342,8 +346,8 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     # the camera: H3 may move it though asked not to; the props left as placed (a desk, a keyboard) don't move, so
     # their apparent motion is the camera's. The export moves the camera, and the arms and the prop seen from it.
     view = None
-    scenery = [np.load(scene / it['tris']) for j, it in enumerate(dump['items']) if j != k and it.get('tris')]
-    if scenery:
+    scenery_tris = [np.load(scene / it['tris']) for j, it in enumerate(dump['items']) if j != k and it.get('tris')]
+    if scenery_tris:
         vcache = folder / f'view_{digest(Path(fp_points.__file__), k)}.npz'
         if vcache.exists():
             c = np.load(vcache)
@@ -356,7 +360,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
                 exclude |= ex[f'arm_{r.hand.side}']
             if prop is not None:
                 exclude |= np.array([ndimage.binary_dilation(m, iterations=6) for m in ex['item_0']])
-            res = fp_points.solve_view(frames, np.concatenate(scenery), exclude, cam, log=lines.append)
+            res = fp_points.solve_view(frames, np.concatenate(scenery_tris), exclude, cam, log=lines.append)
             view = res[0] if res else None
             np.savez(vcache, view=view if view is not None else np.eye(4)[None], moved=view is not None)
         if view is not None:

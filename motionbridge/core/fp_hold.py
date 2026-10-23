@@ -294,3 +294,61 @@ def reuse_grips(rig, params, prop, motion, spans, grips, fps=fp.FPS, log=print):
             log(f'{rig.hand.side.lower()} hand, frames {a}-{b - 1}: the video\'s grip (hold score {video:.1f}) replaced by the '
                 f'grip it is known to make there (score {g[3]:.1f})')
     return P
+
+
+CLEAR = 0.003          # m: what passes into the scenery is slid out of it by this much more
+
+
+def _slide_out(points, scenery, eye, ray_from, step=0.002, far=0.6):
+    """How far points must slide toward the camera, along the line of sight through ray_from, to leave every
+    scenery item (Item, placed as in the scene). 0 if they are clear."""
+    ray = (ray_from - eye) / np.linalg.norm(ray_from - eye)
+    for s in np.arange(0, far, step):
+        p = points - ray * s
+        if all((it.distance(p, np.eye(4)) > 0).all() for it in scenery):
+            return s
+    return far
+
+
+def clear_prop(motion, prop, scenery, cam, log=print):
+    """The tracked prop never inside the scenery (a mouse sunk into the desk: its depth misread): slid toward the
+    camera along its line of sight until clear, which leaves it where the video shows it. Returns motion."""
+    if not scenery:
+        return motion
+    C = np.array(cam['world']); eye = C[:3, 3]
+    pts0 = prop.points[::max(1, len(prop.points) // 400)]
+    out, moved = motion.copy(), []
+    for t, M in enumerate(motion):
+        w = pts0 @ M[:3, :3].T + M[:3, 3]
+        s = _slide_out(w, scenery, eye, M[:3, :3] @ prop.centre + M[:3, 3])
+        if s > 0:
+            ray = (M[:3, :3] @ prop.centre + M[:3, 3]) - eye
+            out[t][:3, 3] = M[:3, 3] - ray / np.linalg.norm(ray) * (s + CLEAR)
+            moved.append(s)
+    if log and moved:
+        log(f'main prop inside the scenery on {len(moved)} frames: slid out toward the camera (up to {max(moved) * 100:.1f} cm)')
+    return out
+
+
+def clear_hand(rig, params, scenery, cam, log=print):
+    """The hand never inside the scenery (a hand below the desk top: its depth misread): slid toward the camera
+    along its palm's line of sight until clear. Returns params."""
+    if not scenery:
+        return params
+    C = np.array(cam['world']); eye = C[:3, 3]
+    P, moved = params.copy(), []
+    for t, x in enumerate(params):
+        p = rig.keypoints(x)
+        pts = np.r_[p, fp._surface_points(p)]
+        pc = p[[0, 5, 9, 13, 17]].mean(0)
+        s = _slide_out(pts, scenery, eye, pc)
+        if s > 0:
+            ray = (pc - eye) / np.linalg.norm(pc - eye)
+            Hf = rig.hand_frame(x).copy()
+            Hf[:3, 3] -= ray * (s + CLEAR)
+            P[t] = fp._place_hand(rig, x, Hf)
+            moved.append(s)
+    if log and moved:
+        log(f'{rig.hand.side.lower()} hand inside the scenery on {len(moved)} frames: slid out toward the camera '
+            f'(up to {max(moved) * 100:.1f} cm)')
+    return P
