@@ -327,6 +327,10 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
         if prop is not None:
             final[i], spans = fp_hold.hold_lock(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam, log=lines.append,
                                               masks=ex[f'arm_{side}'])
+            # a regrip the video reads worse than a grip this hand is known to make there (start pose, a well-read
+            # hold): the known grip
+            grips = fp_hold.known_grips(rig, final[i], prop, smoothed, rel, spans)
+            final[i] = fp_hold.reuse_grips(rig, final[i], prop, smoothed, spans, grips, log=lines.append)
         final[i] = fp_hold.bridge(rig, final[i], rel, spans, log=lines.append, cam=cam)
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)

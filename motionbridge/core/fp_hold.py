@@ -221,3 +221,76 @@ def bridge(rig, params, rel, spans, log=print, cam=None):
                 f'poses at frames {before if before >= 0 else after} and {after if after < T else before}'
                 + (' (out past the frame edge it left through)' if E is not None else ''))
     return P
+
+
+GRIP_REGION = 0.6      # palm lengths: a known grip counts for a hold whose palm is this near it on the prop
+GRIP_BETTER = 1.5      # hold score: a known grip replaces the video's reading only if it holds this much better
+GRIP_SETTLED = 0.9     # reliability of frames whose grip is learned from the video (with the hand holding well)
+
+
+def _grip_score(rig, x, prop, M):
+    c = ev.contacts(rig.keypoints(x)[None], prop, M[None])
+    return float(ev.hold_score(c)[0]), float(c['palm'][0])
+
+
+def known_grips(rig, params, prop, motion, rel, spans, start=True):
+    """Grips this hand is known to make on the prop, relative to it: the scene's start pose (if it holds the
+    prop there) and, per hold, its best-read frame where the video saw the hand well and it held well.
+    Returns [(hand frame on the prop, fingers, palm centre on the prop, score)]."""
+    k = rig.na + 3
+    out = []
+
+    def add(x, M):
+        score, palm = _grip_score(rig, x, prop, M)
+        if score >= ev.HOLD_ON and palm < PALM_NEAR_GRIP:
+            pc = rig.keypoints(x)[[0, 5, 9, 13, 17]].mean(0)
+            out.append((np.linalg.inv(M) @ rig.hand_frame(x), x[k:].copy(), (np.linalg.inv(M) @ np.r_[pc, 1])[:3], score))
+
+    if start:
+        add(np.zeros(rig.size), motion[0])
+    for a, b in spans:
+        good = [t for t in range(a, b) if rel[t] >= GRIP_SETTLED]
+        if good:
+            t = max(good, key=lambda t: _grip_score(rig, params[t], prop, motion[t])[0])
+            add(params[t], motion[t])
+    return out
+
+
+PALM_NEAR_GRIP = 0.12  # palm lengths: a known grip's palm rests this close to the prop
+
+
+def reuse_grips(rig, params, prop, motion, spans, grips, fps=fp.FPS, log=print):
+    """Holds where the video's reading of the hand holds the prop worse than a grip the hand is known to make on
+    the same part of it (a regrip, half hidden, read the wrong way round): the hand eases into that grip over
+    the hold's first EASE (and out over its last, if it lets go before the end); fingers likewise. Returns params."""
+    P = params.copy()
+    T, k = len(P), rig.na + 3
+    if not grips:
+        return P
+    L = ev.palm_length(np.array([rig.keypoints(x) for x in params[:1]]))
+    n = ev._frames(ev.EASE, fps)
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    for a, b in spans:
+        mid = (a + b) // 2
+        pcs = np.array([(np.linalg.inv(motion[t]) @ np.r_[rig.keypoints(params[t])[[0, 5, 9, 13, 17]].mean(0), 1])[:3]
+                        for t in range(a, b)])
+        here = np.median(pcs, axis=0)
+        near = [g for g in grips if np.linalg.norm(g[2] - here) < GRIP_REGION * L]
+        if not near:
+            continue
+        g = max(near, key=lambda g: g[3])
+        video = np.median([_grip_score(rig, params[t], prop, motion[t])[0] for t in range(a, b, max(1, (b - a) // 6))])
+        if g[3] < video + GRIP_BETTER:
+            continue
+        w = np.ones(b - a)
+        if a > 0:
+            w[:n] = np.minimum(w[:n], ev._ramp(n)[:b - a])
+        if b < T:
+            w[-n:] = np.minimum(w[-n:], ev._ramp(n)[::-1][-(b - a):])
+        for i, t in enumerate(range(a, b)):
+            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], motion[t] @ g[0], w[i]))
+            P[t, k:] = (1 - w[i]) * params[t, k:] + w[i] * g[1]
+        if log:
+            log(f'{rig.hand.side.lower()} hand, frames {a}-{b - 1}: the video\'s grip (hold score {video:.1f}) replaced by the '
+                f'grip it is known to make there (score {g[3]:.1f})')
+    return P
