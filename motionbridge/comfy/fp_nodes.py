@@ -382,8 +382,6 @@ class TrackFPHands(io.ComfyNode):
             raise ValueError('Connect images or a video.')
         scene = Path(fp_scene['folder'])
         sample = hashlib.sha256((images[::3, ::4, ::4].cpu().numpy() * 255).astype(np.uint8).tobytes()).hexdigest()
-        # the tracked prop is part of the key: the extraction masks it, so a run with another prop can't reuse it
-        folder = output_folder('fp_motion', digest(sample, list(images.shape), fps, scene.name, fp_scene.get('prop')))
         dump = json.loads((scene / 'rig.json').read_text())
         W, H = images.shape[2], images.shape[1]
         if abs(W / H / (dump['W'] / dump['H']) - 1) > 0.06:  # H3 rounds sizes to multiples of 32; the camera absorbs that
@@ -402,6 +400,9 @@ class TrackFPHands(io.ComfyNode):
         if not rigs:
             raise ValueError('No hand is in view in the start frame.')
         cam = rigs[0].camera(W, H)
+        # the tracked prop and hands are part of the key: the extraction masks them, so a run with others can't reuse it
+        folder = output_folder('fp_motion', digest(sample, list(images.shape), fps, scene.name, fp_scene.get('prop'),
+                                                   [r.hand.side for r in rigs]))
         T = images.shape[0]
         k = fp_scene.get('prop')
         prop = fp_track.Item(scene / dump['items'][k]['file']) if k is not None else None

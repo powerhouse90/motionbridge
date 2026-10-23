@@ -133,7 +133,7 @@ class Rig:
         solves it; with an attached hand, it is the posed forearm bone."""
         fa = self.forearm
         if self.mode == 'arm':
-            m = self.sk.pose(self.basis(x))[self.sk.index[fa['name']], :3, :3]
+            m = self.posed(x)[self.sk.index[fa['name']], :3, :3]
             return m / np.linalg.norm(m, axis=0)
         s, w = fa['shoulder'], self.hand_frame(x)[:3, 3]
         d = np.clip(np.linalg.norm(w - s), 1e-6, fa['L1'] + fa['L2'] - 1e-6)
@@ -178,12 +178,20 @@ class Rig:
                 b[i, :3, :3] = self.basis0[i, :3, :3] @ Rotation.from_rotvec(x[3 * k:3 * k + 3]).as_matrix()
         return b
 
+    def posed(self, x):
+        """The armature posed by parameters x; the last one is kept (keypoints, hand frame and wrist strain of
+        one x share it: the solvers ask for all three per evaluation)."""
+        key = np.asarray(x, float).tobytes()
+        if getattr(self, '_posed_key', None) != key:
+            self._posed_key, self._posed = key, self.sk.pose(self.basis(x))
+        return self._posed
+
     def keypoints(self, x):
-        pose = self.sk.pose(self.basis(x))
+        pose = self.posed(x)
         return np.array([self.sk.point(pose, *kb) for kb in self.hand.keypoint_bones()])
 
     def hand_frame(self, x):
-        H = self.sk.pose(self.basis(x))[self.sk.index[self.hand.hand]].copy()
+        H = self.posed(x)[self.sk.index[self.hand.hand]].copy()
         H[:3, :3] /= np.linalg.norm(H[:3, :3], axis=0)
         return H
 

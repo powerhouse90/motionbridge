@@ -18,6 +18,19 @@ from scipy.spatial.transform import Rotation
 
 from motionbridge.core import rigmap
 
+
+def rotvec_matrix(v):
+    """Rotation matrix of a rotation vector (Rodrigues): what scipy's Rotation gives, without its per-object
+    cost, which dominates the solvers' inner loops."""
+    a = np.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+    if a < 1e-12:
+        return np.eye(3)
+    x, y, z = v[0] / a, v[1] / a, v[2] / a
+    c, s_, C = np.cos(a), np.sin(a), 1 - np.cos(a)
+    return np.array([[c + x * x * C, x * y * C - z * s_, x * z * C + y * s_],
+                     [y * x * C + z * s_, c + y * y * C, y * z * C - x * s_],
+                     [z * x * C - y * s_, z * y * C + x * s_, c + z * z * C]])
+
 FINGERS = rigmap.FINGERS  # Thumb, Index, Middle, Ring, Pinky
 PER_FINGER = 4
 # Joint limits per finger value (bend base, spread, bend middle, bend tip), radians
@@ -147,7 +160,7 @@ class HandModel:
     def basis(self, x):
         b = self.basis0.copy()
         h = self.sk.index[self.hand.hand]
-        b[h, :3, :3] = self.basis0[h, :3, :3] @ Rotation.from_rotvec(x[:3]).as_matrix()
+        b[h, :3, :3] = self.basis0[h, :3, :3] @ rotvec_matrix(x[:3])
         k = 3
         for f in FINGERS:
             if f not in self.hand.fingers:
@@ -155,9 +168,8 @@ class HandModel:
             bend0, spread, bend1, bend2 = x[k:k + 4]; k += 4
             for n, angle, sp in zip(self.hand.fingers[f], (bend0, bend1, bend2), (spread, 0, 0)):
                 ax_b, ax_s = self.axes[n]
-                rot = Rotation.from_rotvec(ax_s * sp) * Rotation.from_rotvec(ax_b * angle)
                 i = self.sk.index[n]
-                b[i, :3, :3] = self.basis0[i, :3, :3] @ rot.as_matrix()
+                b[i, :3, :3] = self.basis0[i, :3, :3] @ rotvec_matrix(ax_s * sp) @ rotvec_matrix(ax_b * angle)
         return b
 
     def keypoints(self, x):

@@ -162,8 +162,9 @@ def arm_world(rigs, basis, angles, log=print, offset=None):
 
 
 SHOULDER_RANGE = 0.15   # m: the shoulder may move this far (each camera axis) to fit the arm to its mask
-SHOULDER_STEP = 0.05    # m: grid of shoulder moves tried
-SHOULDER_EVERY = 4      # the shoulder is searched on every Nth frame, interpolated between
+SHOULDER_STEP = 0.075   # m: coarse grid of shoulder moves tried, then refined around the pick at a third of it
+SHOULDER_EVERY = 8      # the shoulder is searched on every Nth frame, interpolated between (its path is low-passed
+                        # at SHOULDER_CUTOFF anyway)
 SHOULDER_SLACK = 0.03   # IoU: among fits this close to the frame's best, the one moving least is kept
 SHOULDER_THICK = 0.20   # capsule radius / forearm length while searching (calibrated later, at the found shoulder)
 SHOULDER_CUTOFF = 1.0   # Hz: the shoulder path is low-passed (zero phase): a shoulder moves slowly
@@ -179,9 +180,10 @@ def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print):
     T = len(basis)
     C = np.array(cam['world'])
     Rc = C[:3, :3] / np.linalg.norm(C[:3, :3], axis=0)
-    g = np.arange(-SHOULDER_RANGE, SHOULDER_RANGE + 1e-9, SHOULDER_STEP)
-    moves = np.array([Rc @ np.array([x, y, z]) for x in g for y in g for z in g])
-    phis = np.arange(-LIMIT, LIMIT + 1e-6, 20.0)
+    grid = lambda r, st: np.array([Rc @ np.array([x, y, z]) for x in np.arange(-r, r + 1e-9, st)
+                                   for y in np.arange(-r, r + 1e-9, st) for z in np.arange(-r, r + 1e-9, st)])
+    coarse, fine = grid(SHOULDER_RANGE, SHOULDER_STEP), grid(SHOULDER_STEP / 3, SHOULDER_STEP / 3)
+    phis_coarse, phis = np.arange(-LIMIT, LIMIT + 1e-6, 40.0), np.arange(-LIMIT, LIMIT + 1e-6, 20.0)
     poses = [rigs[0].sk.pose(b) for b in basis]
     keys = sorted(set(range(0, T, SHOULDER_EVERY)) | {T - 1})
     out = {}
@@ -199,15 +201,23 @@ def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print):
                 at.append(prev)
                 continue
             wr = poses[t][rig.sk.index[rig.hand.hand]][:3, 3]
-            scores = np.full(len(moves), -1.0)
-            for i, d in enumerate(moves):
-                if np.linalg.norm(wr - fa['shoulder'] - d) > L:
-                    continue  # the hand must stay in reach
-                scores[i] = max(iou(capsules(_arm_segs(rig, poses[t], phi, SHOULDER_THICK, d), cam, m.shape) & keep, target)
-                                for phi in phis)
-            good = scores >= scores.max() - SHOULDER_SLACK
-            cost = np.linalg.norm(moves - prev, axis=1) + 0.5 * np.linalg.norm(moves, axis=1)
-            prev = moves[np.where(good, cost, np.inf).argmin()]
+
+            def pick(moves, phis, best=None):
+                scores = np.full(len(moves), -1.0)
+                for i, d in enumerate(moves):
+                    if np.linalg.norm(wr - fa['shoulder'] - d) > L:
+                        continue  # the hand must stay in reach
+                    scores[i] = max(iou(capsules(_arm_segs(rig, poses[t], phi, SHOULDER_THICK, d), cam, m.shape) & keep, target)
+                                    for phi in phis)
+                top = max(scores.max(), best or -1.0)
+                good = scores >= top - SHOULDER_SLACK
+                cost = np.linalg.norm(moves - prev, axis=1) + 0.5 * np.linalg.norm(moves, axis=1)
+                return moves[np.where(good, cost, np.inf).argmin()] if good.any() else None, scores.max()
+
+            near, top = pick(coarse, phis_coarse)  # coarse: where the arm comes from
+            if near is not None:
+                better, _ = pick(near + fine, phis, top)  # fine, around it
+                prev = better if better is not None else near
             at.append(prev)
         at = np.array(at)
         path = np.stack([np.interp(np.arange(T), keys, at[:, j]) for j in range(3)], 1)
