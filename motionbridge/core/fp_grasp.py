@@ -427,6 +427,13 @@ def grasp_take(rigs, prop, motion, kp2d, kp3d, params, cam, workers=8, strength=
     report['modes2'] = modes2
     report['pass2'] = count(p2, modes2)
     out = [fp.smooth_hand(r, [], [], [], P, strength=strength, log=None) for r, P in zip(rigs, p2)]
+    # frames pass 2 never touched (the hand not on the prop) keep their one smoothing: smoothed twice, a typing
+    # hand's taps are gone; held frames take the second one (it settles pass 2), blended in over a few frames
+    for i in range(len(rigs)):
+        w = np.zeros(T)
+        w[list(held[i])] = 1.0
+        w = np.clip(np.convolve(w, np.ones(7) / 7, mode='same') * 7 / 4, 0, 1)
+        out[i] = w[:, None] * out[i] + (1 - w[:, None]) * smooth[i]
     report['final'] = count(out, modes2)
     report['jitter'] = [(fp.jitter(r, params[i]), fp.jitter(r, smooth[i]), fp.jitter(r, p2[i]), fp.jitter(r, out[i]))
                         for i, r in enumerate(rigs)]
