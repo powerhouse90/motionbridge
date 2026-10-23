@@ -395,8 +395,9 @@ class TrackFPHands(io.ComfyNode):
                 rig = fp_track.Rig(dump, side)
             except ValueError:
                 continue
-            kp = fp_track.project(rig.keypoints(np.zeros(rig.size)), rig.camera(W, H))
-            if ((kp[:, 0] > 0) & (kp[:, 0] < W) & (kp[:, 1] > 0) & (kp[:, 1] < H)).mean() > 0.5:  # in view at the start
+            # tracked if SAM 2 can be prompted on it in the start frame: a hand mostly below the frame edge (a rifle
+            # aimed forward) still counts, and comes into view later; off-screen frames are fp_hold's
+            if len(rig.arm_prompts(rig.camera(W, H))) >= 2:
                 rigs.append(rig)
         if not rigs:
             raise ValueError('No hand is in view in the start frame.')

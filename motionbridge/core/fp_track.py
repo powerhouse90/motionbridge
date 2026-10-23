@@ -201,7 +201,10 @@ class Rig:
             e = self.pose0[fore][:3, 3]
             pts += list(project(np.array([e + a * (wrist - e) for a in (0.6, 0.85)]), cam))
         pts = np.array(pts)
-        return pts[(pts[:, 0] > 0) & (pts[:, 0] < cam['W']) & (pts[:, 1] > 0) & (pts[:, 1] < cam['H'])]
+        on = lambda p: p[(p[:, 0] > 0) & (p[:, 0] < cam['W']) & (p[:, 1] > 0) & (p[:, 1] < cam['H'])]
+        if len(on(pts)) < 2:  # wrist and knuckles off screen (a hand below the frame edge): whatever of it shows
+            pts = np.r_[pts, kp]
+        return on(pts)
 
 
 class Item:
