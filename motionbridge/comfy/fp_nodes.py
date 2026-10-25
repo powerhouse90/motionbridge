@@ -245,6 +245,15 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
     sides = '_'.join(r.hand.side for r in rigs)
     T = len(ex[f'kp2d_{rigs[0].hand.side}'])
     lines = []
+    # the hand reads calibrated on the start frame, whose pose is known (fp_track.calibrate_reads): every step
+    # below, the grasp step's process included, reads these
+    calibrated = folder / f'reads_{digest(Path(fp_track.__file__), [r.hand.side for r in rigs])}.npz'
+    if not calibrated.exists():
+        data = {n: ex[n] for n in ex.files}
+        for r in rigs:
+            data[f'kp2d_{r.hand.side}'] = fp_track.calibrate_reads(r, ex[f'kp2d_{r.hand.side}'], cam, log=lines.append)
+        np.savez(calibrated, **data)
+    ex, extracted = np.load(calibrated), calibrated
     prop = fp_track.Item(scene / dump['items'][k]['file']) if k is not None else None
     tris_file = scene / dump['items'][k].get('tris', f'item_{k}_tris.npy') if k is not None else None
     tris = np.load(tris_file).astype(np.float64) if tris_file is not None and tris_file.exists() else None

@@ -55,6 +55,24 @@ def to_hand21(kp):
     return kp[..., MHR_RIGHT, :]
 
 
+def calibrate_reads(rig, kp2d, cam, log=None):
+    """kp2d (T, reads, points, 2) scaled per read about its middle so the first read frame matches the known start
+    pose's size on screen. SAM reads a gloved hand small (its joints sit inside the glove), and a hand read small
+    is fitted too far from the camera, into the desk; the start frame is exact, so it calibrates the read."""
+    true = project(rig.keypoints(np.zeros(rig.size)), cam)
+    size = lambda u: np.linalg.norm(u - u.mean(0), axis=-1).mean(-1)
+    for t in range(len(kp2d)):
+        if not np.isnan(kp2d[t]).all():
+            k = size(true) / size(np.nanmedian(to_hand21(kp2d[t]), axis=0))
+            break
+    else:
+        return kp2d
+    centre = to_hand21(kp2d).mean(-2, keepdims=True)
+    if log:
+        log(f'{rig.hand.side.lower()} hand: read scaled by {k:.2f} to the start pose on screen')
+    return centre + (kp2d - centre) * k
+
+
 def directions(p):
     v = np.array([p[b] - p[a] for a, b in SEG])
     return v / np.linalg.norm(v, axis=1, keepdims=True)
@@ -320,6 +338,10 @@ def track_hand(rig, items, motions, kp2d, kp3d, arm_masks, cam, log=print, progr
     scale = np.r_[np.full(rig.na, 0.1 if rig.mode == 'control' else 1.0), np.ones(rig.hand.size)]  # natural size of each number
     q = DEPTH_MAP_SCALE
     params, prev, errs = np.zeros((T, rig.size)), np.zeros(rig.size), np.full(T, np.nan)
+    # the read's depth, calibrated on the first frame read: the video starts from the scene's start pose, so
+    # there the hand's distance from the camera is known; the read's is scaled to match from then on
+    wrist0 = (rig.keypoints(np.zeros(rig.size))[0] - C[:3, 3]) @ forward
+    calib = None
     for t in range(T):
         if progress:
             progress(t + 1, T)
@@ -333,6 +355,11 @@ def track_hand(rig, items, motions, kp2d, kp3d, arm_masks, cam, log=print, progr
         span = np.linalg.norm(uv[0] - uv[12])
         ex = to_hand21(kp3d[t])
         ext = (np.nanmedian(ex, axis=0) * rig_size / np.nanmedian([hand_size(p) for p in ex]) * [1, -1, -1]) @ R.T + C[:3, 3]
+        if calib is None:
+            calib = wrist0 / ((ext[0] - C[:3, 3]) @ forward)
+            if log:
+                log(f'{rig.hand.side.lower()} hand: read depth scaled by {calib:.2f} to the start pose')
+        ext = C[:3, 3] + (ext - C[:3, 3]) * calib
         target = directions(ext)
 
         def res(x):

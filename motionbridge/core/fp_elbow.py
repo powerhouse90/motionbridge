@@ -374,7 +374,7 @@ def fit_shoulders(rigs, basis, masks, cam, fps=24, log=print, scenery=(), model=
             log(f'{side.lower()} shoulder: moved median {np.median(n) * 100:.0f} cm, max {n.max() * 100:.0f} cm (fitted to its mask)')
     return out
 
-def straighten_wrists(rigs, params, basis, swing, offset, cam, strength, scenery=(), log=print):
+def straighten_wrists(rigs, params, basis, swing, offset, cam, strength, scenery=(), log=print, fps=24):
     """Each hand tilted toward its rest angle on the forearm (anatomy.straighten) where the video can't tell,
     against the forearm from the arm fit (swing, offset). params: per rig (T, n). Returns new params per rig."""
     poses = [rigs[0].sk.pose(b) for b in basis]
@@ -393,6 +393,9 @@ def straighten_wrists(rigs, params, basis, swing, offset, cam, strength, scenery
             for x, acc in ((P[t], before), (Q[t], after)):
                 p = rig.keypoints(x)
                 acc.append(np.hypot(*np.subtract(anatomy.wrist_angles(p, p[0] - e, side), rest)))
+        if len(P) > 3:  # each frame is solved alone: the change it makes is low-passed so the hand doesn't jitter
+            from motionbridge.core.fp_hold import STEADY_CUTOFF
+            Q = P + one_euro(Q - P, np.zeros(len(P)), fps, STEADY_CUTOFF, 0)
         out.append(Q)
         if log:
             log(f'{side.lower()} wrist straightened ({strength:g}): off its rest angle median {np.median(before):.0f} -> '

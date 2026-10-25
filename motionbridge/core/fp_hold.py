@@ -463,7 +463,7 @@ WRIST_RADIUS = 0.035   # m: a wrist's half-thickness (and the forearm just behin
 
 def _slide_out(points, scenery, eye, ray_from, step=0.002, far=0.6, allow=None):
     """How far points must slide toward the camera, along the line of sight through ray_from, to leave every
-    scenery item (Item, placed as in the scene), each point allowed allow[item][point] deep (m). 0 if clear."""
+    scenery item (Item, placed as in the scene), each allowed allow[item] deep (m). 0 if clear."""
     ray = (ray_from - eye) / np.linalg.norm(ray_from - eye)
     for s in np.arange(0, far, step):
         p = points - ray * s
@@ -504,25 +504,32 @@ def _clear_points(p):
 
 def clear_hand(rig, params, scenery, cam, log=print):
     """The hand never inside the scenery (a hand below the desk top: its depth misread): slid toward the camera
-    along its palm's line of sight until clear. No deeper than the scene's own start pose puts it, that is: the
-    video starts from that frame, so whatever the start pose leaves inside the scenery (a hand on edge, its
+    along its palm's line of sight until clear. No deeper than the scene's own start pose goes, that is: the
+    video starts from that frame, so how far the start pose reaches into the scenery (a hand on edge, its
     little finger through the desk top) is the scene's, not a misread. Returns params."""
     if not scenery:
         return params
     C = np.array(cam['world']); eye = C[:3, 3]
     p0 = _clear_points(rig.keypoints(np.zeros(rig.size)))
-    allow = [np.maximum(-it.distance(p0, np.eye(4)), 0) for it in scenery]
+    allow = [max(-it.distance(p0, np.eye(4)).min(), 0.0) for it in scenery]
     P, moved = params.copy(), []
+    slide = np.zeros(len(params))
     for t, x in enumerate(params):
         p = rig.keypoints(x)
-        pc = p[[0, 5, 9, 13, 17]].mean(0)
-        s = _slide_out(_clear_points(p), scenery, eye, pc, allow=allow)
-        if s > 0:
+        slide[t] = _slide_out(_clear_points(p), scenery, eye, p[[0, 5, 9, 13, 17]].mean(0), allow=allow)
+    if len(params) > 3:  # eased over time (the most of nearby frames, low-passed): a hand on and off the desk doesn't hop
+        from scipy.ndimage import maximum_filter1d
+        from motionbridge.core.smooth import one_euro
+        n = ev._frames(ev.EASE, fp.FPS)
+        slide = np.maximum(one_euro(maximum_filter1d(slide, 2 * n + 1)[:, None], np.zeros(len(slide)), fp.FPS, STEADY_CUTOFF, 0)[:, 0], 0)
+    for t, x in enumerate(params):
+        if slide[t] > 1e-4:
+            pc = rig.keypoints(x)[[0, 5, 9, 13, 17]].mean(0)
             ray = (pc - eye) / np.linalg.norm(pc - eye)
             Hf = rig.hand_frame(x).copy()
-            Hf[:3, 3] -= ray * (s + CLEAR)
+            Hf[:3, 3] -= ray * (slide[t] + CLEAR)
             P[t] = fp._place_hand(rig, x, Hf)
-            moved.append(s)
+            moved.append(slide[t])
     if log and moved:
         log(f'{rig.hand.side.lower()} hand inside the scenery on {len(moved)} frames: slid out toward the camera '
             f'(up to {max(moved) * 100:.1f} cm)')
