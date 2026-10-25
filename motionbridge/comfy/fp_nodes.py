@@ -234,10 +234,11 @@ def grasp_step(scene, dump, k, rigs, prop, motion, params, extracted, cam, stren
 
 
 def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smoothing, see_through, grasp, workers, roll,
-               log, progress):
+               log, progress, straighten=0.0):
     """The points pipeline: the main prop placed from points followed on its texture (fp_points), the hands
     tracked against it (see-through in capture mode), the grasp step where a hand holds it (fp_grasp), the
-    forearms rolled with the hands (fp_twist). Returns (track npz, report lines). Each step is cached by its
+    forearms rolled with the hands (fp_twist), the wrists straightened where the video allows (straighten, 0-1).
+    Returns (track npz, report lines). Each step is cached by its
     inputs and the code that makes it."""
     import cv2
     from motionbridge.core import fp_track, fp_points, fp_grasp, fp_twist, fp_elbow, fp_hold
@@ -313,6 +314,11 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
         rel = fp_hold.reliability(ex[f'kp2d_{side}'], E, cam['W'], cam['H'])
         spans = []
         if prop is not None:
+            # a read the wrong size for the hand on its grip (a hand at the camera, cut by the frame edge) is a misread
+            bad = fp_hold.misread(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam)
+            if bad.any():
+                rel = fp_hold.distrust(rel, bad)
+                lines.append(f'{side.lower()} hand: read at the wrong size for its grip on {int(bad.sum())} frames: kept on its grip there')
             final[i], spans = fp_hold.hold_lock(rig, final[i], prop, smoothed, rel, ex[f'kp2d_{side}'], cam, log=lines.append,
                                               masks=ex[f'arm_{side}'])
             # a regrip the video reads worse than a grip this hand is known to make there (start pose, a well-read
@@ -320,6 +326,7 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
             grips = fp_hold.known_grips(rig, final[i], prop, smoothed, rel, spans)
             final[i] = fp_hold.reuse_grips(rig, final[i], prop, smoothed, spans, grips, log=lines.append)
         final[i] = fp_hold.bridge(rig, final[i], rel, spans, log=lines.append, cam=cam)
+        final[i] = fp_hold.steady(rig, final[i], rel, smoothed, spans)  # a badly read hand doesn't shake with its read
         final[i] = fp_hold.clear_hand(rig, final[i], scenery, cam, log=lines.append)  # nor a hand through the desk
     basis = fp_track.combined_basis(rigs, final)
     arm_names = np.array([], str)
@@ -327,8 +334,11 @@ def track_take(scene, dump, k, rigs, ex, extracted, frames_dir, folder, cam, smo
         # the arms to their masks: where the shoulder sits (a viewmodel pushed forward and down when aiming), then
         # the elbow's swing, then the forearm rolled with the hand
         masks = {r.hand.side: ex[f'arm_{r.hand.side}'] for r in rigs if f'arm_{r.hand.side}' in ex.files}
-        offset = fp_elbow.fit_shoulders(rigs, basis, masks, cam, log=log)
-        swing, _ = fp_elbow.fit_elbows(rigs, basis, masks, cam, log=log, offset=offset)
+        offset = fp_elbow.fit_shoulders(rigs, basis, masks, cam, log=log, scenery=scenery)
+        swing, _ = fp_elbow.fit_elbows(rigs, basis, masks, cam, log=log, offset=offset, scenery=scenery)
+        if straighten > 0:
+            final = fp_elbow.straighten_wrists(rigs, final, basis, swing, offset, cam, straighten, scenery, log=lines.append)
+            basis = fp_track.combined_basis(rigs, final)
         arm_names, arm_world, rolls = fp_twist.forearm_roll(rigs, basis, log=log, swing=swing, offset=offset)
         if len(arm_names):
             basis = arm_basis(rigs[0].sk, basis, arm_names, arm_world)
@@ -400,12 +410,17 @@ class TrackFPHands(io.ComfyNode):
                 io.Boolean.Input('forearm_roll', default=True, optional=True, advanced=True,
                                  tooltip='Turn each forearm along its length with the hand (pronation / supination), so the '
                                          'wrist only bends. Mutes the arm IK in the exported .blend.'),
+                io.Float.Input('wrist_straightening', default=0.0, min=0.0, max=1.0, step=0.05, optional=True, advanced=True,
+                               tooltip='Pull each wrist toward how the hand sits on the forearm in the start pose. The '
+                                       'knuckles and fingertips stay on the video; the wrist (and the base of the thumb) may '
+                                       'leave it, more the higher this is. 0 = the wrist as the video shows it. Needs '
+                                       'forearm_roll.'),
             ],
             outputs=[FPMotion.Output(display_name='fp_motion'), io.String.Output(display_name='report')])
 
     @classmethod
     def execute(cls, fp_scene, fps, smoothing, hands='both', images=None, video=None, pipeline='classic', grasp_workers=8,
-                forearm_roll=True):
+                forearm_roll=True, wrist_straightening=0.0):
         from motionbridge.core import fp_track
         if video is not None:
             components = video.get_components()
@@ -467,7 +482,7 @@ class TrackFPHands(io.ComfyNode):
         if pipeline != 'classic':
             track, lines = track_take(scene, dump, k, rigs, ex, extracted, folder / 'frames', folder, cam, smoothing,
                                       bool(fp_scene.get('capture', False)), pipeline == 'points + grasp', grasp_workers,
-                                      forearm_roll, log.append, progress)
+                                      forearm_roll, log.append, progress, wrist_straightening)
             head = f'{T} frames at {fps:g} fps on {dump["armature"]}; main prop: {dump["items"][k]["name"] if prop is not None else "none"}; {pipeline}'
             report = '\n'.join([head] + lines + log[-3:])
             motion = {'scene': fp_scene, 'track': str(track), 'frames': str(folder / 'frames'), 'fps': fps, 'name': fp_scene['name']}

@@ -22,7 +22,8 @@ SETTLED = 0.7      # reliability of the frames a hold's settled pose is taken fr
 CUTOFF = 2.0       # Hz: reliability is low-passed so the lock doesn't flicker
 FLOOR = 0.15       # the lock's pull on a fully visible hand: enough to stop slip, not to override the video
 UNSEEN_ON = 0.5    # a locked hand this much on screen ...
-UNSEEN_MASK = 0.2  # ... with this little of it on the video's arm mask is contradicted: the hand isn't there
+UNSEEN_MASK = 0.2  # ... with this little of it on (or near) the video's arm mask is contradicted: the hand isn't there
+UNSEEN_NEAR = 0.5  # hand spans: arm mask this near the grip counts (a grip a little off is not a hand gone)
 EDGE = 0.15        # share of the frame: a hand lost this close to an edge left through it
 PAST = 0.3         # hand spans: a bridged hand goes this far past the edge it left through
 APART = 0.3        # hand spans: the read palm this far from the prop on screen has let go (depth can't say so:
@@ -92,47 +93,207 @@ def _settled(rig, params, motion, rel, Hf, a, b):
     return ev.mean_pose(np.linalg.inv(motion[good]) @ Hf[good]), np.median(params[good, k:], axis=0)
 
 
-def contradicted(rig, params, motion, rel, spans, masks, cam):
+def contradicted(rig, params, motion, rel, spans, masks, cam, grips):
     """(T,) bool: unreliable frames inside a hold where the hand, put at its grip, would be on screen but the
-    video's arm mask shows no hand there (a hand that went off with a part of the prop, e.g. a magazine)."""
+    video's arm mask shows no arm anywhere near (a hand that went off with a part of the prop, e.g. a magazine;
+    a grip only a little off the hand is not one). grips: per span (per-frame grips (b - a, 4, 4), fingers)."""
+    import cv2
     T = len(params)
     out = np.zeros(T, bool)
-    Hf = np.array([rig.hand_frame(x) for x in params])
     H, W = masks.shape[1:]
-    for a, b in spans:
-        ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
+    for (a, b), (refs, fingers) in zip(spans, grips):
         for t in range(a, b):
             if rel[t] >= TRUST:
                 continue
-            x = fp._place_hand(rig, params[t], motion[t] @ ref)
+            x = fp._place_hand(rig, params[t], motion[t] @ refs[t - a])
             x[rig.na + 3:] = fingers
             uv = project(rig.keypoints(x), cam) * [W / cam['W'], H / cam['H']]
             on = (uv[:, 0] >= 0) & (uv[:, 0] < W) & (uv[:, 1] >= 0) & (uv[:, 1] < H)
             if on.mean() >= UNSEEN_ON:
                 q = uv[on].astype(int)
-                out[t] = masks[t][q[:, 1], q[:, 0]].mean() < UNSEEN_MASK
+                r = max(int(UNSEEN_NEAR * np.linalg.norm(uv[0] - uv[12])), 1)
+                near = cv2.dilate(masks[t].astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+                out[t] = near[q[:, 1], q[:, 0]].mean() < UNSEEN_MASK
     return out
+
+
+MISREAD = 1.5      # the read palm this many times smaller or larger on screen than the hand on its grip: misread
+
+
+def misread(rig, params, prop, motion, rel, kp2d, cam, fps=fp.FPS):
+    """(T,) bool: frames whose read is the wrong size for the hand on its grip. A hand close to the camera and
+    cut by the frame edge can be read at a fraction of its size, and the fit then puts it far behind the prop it
+    holds. Checked from each hold's start to the next hold's, against that hold's grip carried by the prop (which
+    is tracked on its own)."""
+    T = len(params)
+    out = np.zeros(T, bool)
+    spans = holds(rig, params, prop, motion, rel, kp2d, cam, fps)
+    if not spans:
+        return out
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    palm = [0, 5, 9, 13, 17]
+    size = lambda uv: np.linalg.norm(uv[palm] - uv[palm].mean(0), axis=1).mean()
+    for i, (a, b) in enumerate(spans):
+        ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
+        for t in range(a, spans[i + 1][0] if i + 1 < len(spans) else T):
+            if np.isnan(kp2d[t]).all():
+                continue
+            x = fp._place_hand(rig, params[t], motion[t] @ ref)
+            x[rig.na + 3:] = fingers
+            ratio = size(np.nanmedian(fp.to_hand21(kp2d[t]), axis=0)) / size(project(rig.keypoints(x), cam))
+            out[t] = not 1 / MISREAD < ratio < MISREAD
+    return out
+
+
+GRIP_RADII = dict(palm=0.022, edge=0.016, finger=0.0095, thumb=0.011, forearm=(0.03, 0.04))
+GRIP_FOREARM = 0.25      # m of forearm drawn behind the wrist (the arm mask runs on to the frame edge)
+GRIP_TOUCH = 0.015       # m: finger points this close to the prop in the grip hold it
+GRIP_TURNS = np.arange(-120.0, 120.1, 7.5)  # deg: turns of the hand about what it holds, tried per frame
+GRIP_SMOOTH = 0.02       # cost per (deg/frame / 10)^2 of turn change between frames (1 - IoU units)
+GRIP_PRIOR = 0.05        # cost at 90 deg of turn, quadratic: a frame the mask can't decide keeps the grip as read
+_CHAINS = [(0, 1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20)]
+
+
+def _hand_segs(p):
+    """The hand of 21 points as tapered capsules (fp_elbow.capsules): palm, fingers, and the forearm behind the
+    wrist along the hand (a straight wrist)."""
+    R = GRIP_RADII
+    segs = [(p[0], p[j], R['palm'], R['palm']) for j in (5, 9, 13, 17)] + [(p[5], p[17], R['edge'], R['edge'])]
+    for c in _CHAINS:
+        r = R['thumb'] if c[0] == 0 else R['finger']
+        segs += [(p[i], p[j], r, r * 0.85) for i, j in zip(c[:-1], c[1:])]
+    back = p[0] - p[9]
+    segs.append((p[0], p[0] + back / np.linalg.norm(back) * GRIP_FOREARM, *R['forearm']))
+    return segs
+
+
+def grip_turns(rig, params, prop, motion, ref, fingers, masks, cam, frames, log=None):
+    """A grip turning about what it holds over a hold: the hand keeps its fingers on the prop but rolls about
+    the line its touching fingers lie along (a mug's handle, a rifle's grip), as a hand tips a mug to drink. Per
+    frame the turn that best covers the video's arm mask, as a smooth path (Viterbi). The read of a hand gives
+    its depth and roll badly once the prop is near the camera; the mask stays right. Returns (len(frames), 4, 4)
+    grips (hand frame in the prop's frame)."""
+    from scipy.spatial.transform import Rotation
+    from motionbridge.core import fp_elbow
+    x = fp._place_hand(rig, params[frames[0]], ref)
+    x[rig.na + 3:] = fingers
+    p = rig.keypoints(x)[1:]
+    touch = p[np.abs(prop.distance(p, np.eye(4))) < GRIP_TOUCH]
+    if len(touch) < 3:
+        return np.repeat(ref[None], len(frames), 0)
+    c = touch.mean(0)
+    axis = np.linalg.svd(touch - c)[2][0]  # the line the touching fingers lie along
+    turn = []
+    for a in GRIP_TURNS:
+        D = np.eye(4)
+        D[:3, :3] = Rotation.from_rotvec(axis * np.radians(a)).as_matrix()
+        D[:3, 3] = c - D[:3, :3] @ c
+        turn.append(D @ ref)
+    unary = np.zeros((len(frames), len(GRIP_TURNS)))
+    for i, t in enumerate(frames):
+        target = fp_elbow._down(masks[t])
+        for j, g in enumerate(turn):
+            y = fp._place_hand(rig, params[t], motion[t] @ g)
+            y[rig.na + 3:] = fingers
+            unary[i, j] = 1 - fp_elbow.iou(fp_elbow.capsules(_hand_segs(rig.keypoints(y)), cam, target.shape), target)
+    seen = 1 - unary
+    unary += GRIP_PRIOR * (GRIP_TURNS / 90) ** 2
+    jump = GRIP_SMOOTH * ((GRIP_TURNS[:, None] - GRIP_TURNS[None, :]) / 10) ** 2
+    cost, back = unary[0].copy(), np.zeros(unary.shape, int)
+    for i in range(1, len(frames)):
+        tot = cost[None, :] + jump
+        back[i] = tot.argmin(1)
+        cost = tot.min(1) + unary[i]
+    path = np.zeros(len(frames), int)
+    path[-1] = cost.argmin()
+    for i in range(len(frames) - 1, 0, -1):
+        path[i - 1] = back[i, path[i]]
+    if log:
+        zero = int(np.argmin(np.abs(GRIP_TURNS)))
+        log(f'{rig.hand.side.lower()} grip turned about the prop to fit the arm mask: up to {np.abs(GRIP_TURNS[path]).max():.0f} deg, '
+            f'mask overlap {seen[:, zero].mean():.2f} -> {seen[np.arange(len(path)), path].mean():.2f}')
+    return np.array([turn[j] for j in path])
+
+
+def distrust(rel, bad, fps=fp.FPS):
+    """rel with the frames in bad made unreliable, eased in and out over ev.EASE so the hand doesn't snap
+    between its read and its grip at their ends."""
+    n = ev._frames(ev.EASE, fps)
+    k = np.r_[ev._ramp(n), 1.0, ev._ramp(n)[::-1]]
+    near = np.clip(np.convolve(bad.astype(float), k, mode='same'), 0, 1)
+    return rel * (1 - near)
+
+
+STEADY_CUTOFF = 2.0  # Hz: the low-pass an unreliable frame is pulled toward
+
+
+def steady(rig, params, rel, motion=None, spans=(), fps=fp.FPS):
+    """params with each frame pulled toward a low-passed path by 1 - reliability: a hand read badly (through a
+    glass prop, half off screen) shakes with its read, a hand read well keeps every move (taps, grabs). A held
+    hand is smoothed relative to the prop, so it stays on its grip; a free one in the world. Returns params."""
+    from scipy.spatial.transform import Rotation
+    from motionbridge.core.smooth import one_euro
+    T, k = len(params), rig.na + 3
+    if T < 4:
+        return params
+    held = np.zeros(T, bool)
+    for a, b in spans:
+        held[a:b] = True
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    G = np.array([np.linalg.inv(motion[t]) @ Hf[t] if held[t] else Hf[t] for t in range(T)])
+    P = params.copy()
+    cuts = np.flatnonzero(np.diff(held.astype(int))) + 1
+    for seg in np.split(np.arange(T), cuts):
+        if len(seg) < 4:
+            continue
+        q = Rotation.from_matrix(G[seg, :3, :3]).as_quat()
+        q *= np.sign(np.cumprod(np.r_[1.0, np.sign(np.sum(q[1:] * q[:-1], axis=1) + 1e-12)]))[:, None]
+        z = np.zeros(len(seg))
+        tr = one_euro(G[seg, :3, 3], z, fps, STEADY_CUTOFF, 0)
+        rot = Rotation.from_quat(one_euro(q, z, fps, STEADY_CUTOFF, 0)).as_matrix()
+        fing = one_euro(params[seg, k:], z, fps, STEADY_CUTOFF, 0)
+        for i, t in enumerate(seg):
+            w = 1 - rel[t]
+            if w <= 0:
+                continue
+            S = np.eye(4)
+            S[:3, :3], S[:3, 3] = rot[i], tr[i]
+            target = fp._blend(G[t], S, w)
+            P[t] = fp._place_hand(rig, params[t], motion[t] @ target if held[t] else target)
+            P[t, k:] = (1 - w) * params[t, k:] + w * fing[i]
+    return P
 
 
 def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, log=print, masks=None):
     """params with each hold kept: the hand pulled to its settled pose on the prop (taken from the hold's
     reliable frames) by 1 - reliability (at least FLOOR), eased in and out at the hold's ends; the fingers
-    likewise toward their settled grip. With the arm masks, a hold the video contradicts ends there
-    (contradicted()). Returns (params, spans)."""
+    likewise toward their settled grip. With the arm masks, the grip turns about the prop to fit them
+    (grip_turns()), and a hold the video contradicts ends there (contradicted()). Returns (params, spans)."""
     P = params.copy()
     T, k = len(P), rig.na + 3
+    Hf = np.array([rig.hand_frame(x) for x in params])
+    mask = masks is not None and cam is not None
+
+    def grips(spans):  # per span: the grip per frame (turned about the prop to the arm mask) and the fingers
+        out = []
+        for a, b in spans:
+            ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
+            refs = grip_turns(rig, params, prop, motion, ref, fingers, masks, cam, range(a, b), log) if mask else np.repeat(ref[None], b - a, 0)
+            out.append((refs, fingers))
+        return out
+
     spans = holds(rig, params, prop, motion, rel, kp2d, cam, fps)
-    if masks is not None and cam is not None:
-        block = contradicted(rig, params, motion, rel, spans, masks, cam)
+    held = grips(spans)
+    if mask:
+        block = contradicted(rig, params, motion, rel, spans, masks, cam, held)
         if block.any():
             spans = holds(rig, params, prop, motion, rel, kp2d, cam, fps, block)
+            held = grips(spans)
             if log:
                 log(f"{rig.hand.side.lower()} hand: the video contradicts its hold on {int(block.sum())} frames "
                     f"(no hand where its grip would put it): let go there")
-    Hf = np.array([rig.hand_frame(x) for x in params])
     n = ev._frames(ev.EASE, fps)
-    for a, b in spans:
-        ref, fingers = _settled(rig, params, motion, rel, Hf, a, b)
+    for (a, b), (refs, fingers) in zip(spans, held):
         edge = np.ones(b - a)
         if a > 0:
             edge[:n] = np.minimum(edge[:n], ev._ramp(n)[:b - a])
@@ -140,7 +301,7 @@ def hold_lock(rig, params, prop, motion, rel, kp2d=None, cam=None, fps=fp.FPS, l
             edge[-n:] = np.minimum(edge[-n:], ev._ramp(n)[::-1][-(b - a):])
         for i, t in enumerate(range(a, b)):
             w = edge[i] * max(1 - rel[t], FLOOR)
-            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], motion[t] @ ref, w))
+            P[t] = fp._place_hand(rig, params[t], fp._blend(Hf[t], motion[t] @ refs[i], w))
             P[t, k:] = (1 - w) * params[t, k:] + w * fingers
         if log:
             unseen = sum(rel[t] < TRUST for t in range(a, b))
@@ -297,15 +458,16 @@ def reuse_grips(rig, params, prop, motion, spans, grips, fps=fp.FPS, log=print):
 
 
 CLEAR = 0.003          # m: what passes into the scenery is slid out of it by this much more
+WRIST_RADIUS = 0.035   # m: a wrist's half-thickness (and the forearm just behind it)
 
 
-def _slide_out(points, scenery, eye, ray_from, step=0.002, far=0.6):
+def _slide_out(points, scenery, eye, ray_from, step=0.002, far=0.6, allow=None):
     """How far points must slide toward the camera, along the line of sight through ray_from, to leave every
-    scenery item (Item, placed as in the scene). 0 if they are clear."""
+    scenery item (Item, placed as in the scene), each point allowed allow[item][point] deep (m). 0 if clear."""
     ray = (ray_from - eye) / np.linalg.norm(ray_from - eye)
     for s in np.arange(0, far, step):
         p = points - ray * s
-        if all((it.distance(p, np.eye(4)) > 0).all() for it in scenery):
+        if all((it.distance(p, np.eye(4)) > (-allow[i] if allow is not None else 0)).all() for i, it in enumerate(scenery)):
             return s
     return far
 
@@ -330,18 +492,31 @@ def clear_prop(motion, prop, scenery, cam, log=print):
     return out
 
 
+def _clear_points(p):
+    """The hand's keypoints, its surface, and the wrist and start of the forearm (they have thickness too:
+    points a wrist's radius around the wrist and along the hand's line back toward the elbow)."""
+    back = p[0] - p[9]
+    back = back / np.linalg.norm(back)
+    ring = [p[0] + back * a + WRIST_RADIUS * np.array(v) for a in (0.0, 0.04, 0.08) for v in
+            ((0, 0, -1), (0, 0, 1), (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0))]
+    return np.r_[p, fp._surface_points(p), ring]
+
+
 def clear_hand(rig, params, scenery, cam, log=print):
     """The hand never inside the scenery (a hand below the desk top: its depth misread): slid toward the camera
-    along its palm's line of sight until clear. Returns params."""
+    along its palm's line of sight until clear. No deeper than the scene's own start pose puts it, that is: the
+    video starts from that frame, so whatever the start pose leaves inside the scenery (a hand on edge, its
+    little finger through the desk top) is the scene's, not a misread. Returns params."""
     if not scenery:
         return params
     C = np.array(cam['world']); eye = C[:3, 3]
+    p0 = _clear_points(rig.keypoints(np.zeros(rig.size)))
+    allow = [np.maximum(-it.distance(p0, np.eye(4)), 0) for it in scenery]
     P, moved = params.copy(), []
     for t, x in enumerate(params):
         p = rig.keypoints(x)
-        pts = np.r_[p, fp._surface_points(p)]
         pc = p[[0, 5, 9, 13, 17]].mean(0)
-        s = _slide_out(pts, scenery, eye, pc)
+        s = _slide_out(_clear_points(p), scenery, eye, pc, allow=allow)
         if s > 0:
             ray = (pc - eye) / np.linalg.norm(pc - eye)
             Hf = rig.hand_frame(x).copy()

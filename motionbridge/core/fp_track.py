@@ -127,6 +127,10 @@ class Rig:
                             'L1': np.linalg.norm(self.pose0[fore][:3, 3] - self.pose0[upper][:3, 3]),
                             'L2': np.linalg.norm(tails[fore] - self.pose0[fore][:3, 3]), 'F0': frame(fore)}
             self.forearm['rel0'] = self.forearm['F0'].T @ self.hand_frame(np.zeros(self.size))[:3, :3]
+            # the hand on the forearm as the mesh was modeled (bind pose): a start pose may already twist the wrist
+            unit = lambda m: m / np.linalg.norm(m, axis=0)
+            rest = self.sk.rest
+            self.forearm['bind'] = unit(rest[self.sk.index[fore], :3, :3]).T @ unit(rest[h, :3, :3])
 
     def forearm_frame(self, x):
         """The forearm's frame (columns; y along it) for parameters x. With the hand on an IK control, the

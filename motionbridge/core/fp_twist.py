@@ -99,9 +99,10 @@ def forearm_roll(rigs, basis, log=print, swing=None, offset=None):
                 v = Rotation.from_rotvec(u * np.radians(swing[rig.hand.side][t])).apply(v)
             elbow = s + a * u + h * v
             Wu[t], Wf[t] = _aim(P0u, s, elbow), _aim(P0f, elbow, wr)
-            # the hand's roll about the forearm axis, relative to the start pose: moved into the forearm
+            # the hand's roll about the forearm axis, relative to the mesh as modeled (bind pose, not the start
+            # pose, which may twist the wrist already): moved into the forearm, so the wrist itself never twists
             Ff = Wf[t][:3, :3] / np.linalg.norm(Wf[t][:3, :3], axis=0)
-            q = Rotation.from_matrix(Ff.T @ Hr @ fa['rel0'].T).as_quat()
+            q = Rotation.from_matrix(Ff.T @ Hr @ fa['bind'].T).as_quat()
             twist = (2 * np.arctan2(q[1], q[3]) + np.pi) % (2 * np.pi) - np.pi
             Wf[t][:3, :3] = Rotation.from_rotvec(Ff[:, 1] * twist).as_matrix() @ Wf[t][:3, :3]
             roll[t] = np.degrees(twist)
