@@ -97,7 +97,7 @@ class LoadCharacter(io.ComfyNode):
     def execute(cls, asset_file, armature_name='', setup=None):
         from motionbridge.core import rigmap
         asset = resolve_input(asset_file)
-        folder = output_folder('characters', f'{asset.stem}_{digest(asset, armature_name)}')
+        folder = output_folder('characters', f'{asset.stem}_{digest(asset, armature_name, Path(__file__).parents[1] / "blender" / "dump_rig.py")}')
         dump_file = folder / 'rig.json'
         if not dump_file.exists():
             args = ['--file', asset, '--out', dump_file] + (['--armature', armature_name] if armature_name else [])
@@ -153,11 +153,15 @@ class VideoToMotion(io.ComfyNode):
                 io.Combo.Input('camera', options=list(LENSES), default='rendered reference (orthographic)',
                                tooltip='Rendered references use a near-orthographic camera; GEM\'s default lens '
                                        'hunches the pose there. Use "real camera" for phone or webcam footage.'),
+                io.String.Input('camera_metadata', optional=True, force_input=True,
+                                tooltip='Render Starting Views camera metadata. Connected (with a multi-view panel), the '
+                                        'three-quarter panel is read too and the motion refined to agree with both: limbs '
+                                        'reaching toward or away from the camera, and the body staying where it is.'),
             ],
             outputs=[Motion.Output(display_name='motion')])
 
     @classmethod
-    def execute(cls, fps, panel, camera, images=None, video=None):
+    def execute(cls, fps, panel, camera, images=None, video=None, camera_metadata=None):
         from motionbridge.core import soma
         from motionbridge.gem.extract import extract
         if video is not None:
@@ -167,6 +171,7 @@ class VideoToMotion(io.ComfyNode):
             raise ValueError('Connect images or a video.')
         index, count = PANELS[panel]
         width = images.shape[2] // count
+        second = images[:, :, width:2 * width] if count >= 2 and camera_metadata else None  # the three-quarter panel
         images = images[:, :, index * width:(index + 1) * width]
         if images.shape[0] < 15:
             raise ValueError(f'GEM needs at least 15 frames; got {images.shape[0]}.')
@@ -183,7 +188,31 @@ class VideoToMotion(io.ComfyNode):
             export = extract(clip, folder / 'gem', rt.gem_root, rt.gem_python, LENSES[camera], env=rt.gem_env(),
                              interrupted=comfy.model_management.throw_exception_if_processing_interrupted)
             soma.from_gem_export(export, fps).save(motion_file)
+        if second is not None:
+            motion_file = two_view(folder, motion_file, second, fps, json.loads(camera_metadata), rt)
         return io.NodeOutput({'file': str(motion_file), 'fps': fps, 'source': str(folder / 'source.mp4')})
+
+
+def two_view(folder, motion_file, second, fps, metadata, rt):
+    """GEM's motion refined against the second (three-quarter) panel too (core.twoview); cached by the cameras."""
+    from motionbridge.core import soma, twoview
+    from motionbridge.gem.extract import extract
+    cams = metadata['cameras']
+    out = folder / f'motion_twoview_{digest(json.dumps(cams, sort_keys=True))}.npz'
+    if out.exists():
+        return out
+    clip = folder / 'second.mp4'
+    if not clip.exists():
+        frames_to_video(second, fps, clip)
+    free_vram()
+    kp2 = extract(clip, folder / 'gem_second', rt.gem_root, rt.gem_python, env=rt.gem_env(), stages=['detect', 'pose'],
+                  interrupted=comfy.model_management.throw_exception_if_processing_interrupted)
+    kp1 = folder / 'gem' / 'capture' / 'preprocess' / 'vitpose.pt'
+    g = np.load(folder / 'gem' / 'motion_export.npz')
+    views = [(cams['front'], torch.load(kp1).numpy()), (cams['threequarter'], torch.load(kp2).numpy())]
+    corr, report = twoview.refine(g['names'], g['parents'], g['incam_transforms'], views, cams['front'], fps, log=print)
+    twoview.apply(soma.load(motion_file), corr, g['incam_transforms'], report['hips']).save(out)
+    return out
 
 
 class SmoothMotion(io.ComfyNode):
@@ -205,7 +234,8 @@ class SmoothMotion(io.ComfyNode):
         from motionbridge.core import smooth, soma
         if strength <= 0:
             return io.NodeOutput(motion)
-        out = Path(motion['file']).with_name(f'motion_smooth{strength:g}.npz')
+        src = Path(motion['file'])
+        out = src.with_name(f'{src.stem}_smooth{strength:g}.npz')  # per input: a refined motion isn't the raw one
         if not out.exists():
             smooth.smooth(soma.load(motion['file']), strength).save(out)
         return io.NodeOutput({**motion, 'file': str(out)})

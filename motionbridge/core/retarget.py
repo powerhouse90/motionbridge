@@ -161,12 +161,17 @@ def soma_facing(motion, face_start=True):
     return world, left, fwd
 
 
-def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
+def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', match_start=True):
     """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump.
     feet_ik pins planted feet (contacts detected on SOMA) with leg IK.
     head='face': the rig's face points where the performer's face points (world space).
     head='carriage': the head keeps the character's built-in rest carriage and adds the
-    performer's change on top (for characters modelled with a deliberate head pose)."""
+    performer's change on top (for characters modelled with a deliberate head pose).
+    match_start: the motion's first frame is the character's own start pose (the dump's 'start', the frame the
+    starting views drew), so the video's first frame is known exactly; each mapped bone's difference from it there
+    is taken off every frame, and the hips start where the character stands. The extraction's guess of the start
+    stance (feet too close, a foot forward) otherwise stays for the whole take. Off for footage that doesn't start
+    from the character's pose."""
     bones = dump['bones']
     names = [b['name'] for b in bones]
     index = {n: i for i, n in enumerate(names)}
@@ -229,6 +234,12 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
                                    soma_face @ rig_face.T @ rest[hb, :3, :3])
     elif head != 'carriage':
         raise ValueError(f"head must be 'face' or 'carriage', not {head!r}")
+    start = None
+    if match_start and all('start' in b for b in bones):
+        start = np.array([obj_inv @ np.array(b['start']) for b in bones])
+        start[:, :3, :3] = [_orthonormal(m) for m in start[:, :3, :3]]
+        for b in target_rot:  # the first frame becomes the start pose; the same turn off every frame
+            target_rot[b] = target_rot[b] @ (target_rot[b][0].T @ start[b, :3, :3])
 
     # Root: hip-to-ankle ratio scales travel and height above the floor.
     roles = rigmap.roles
@@ -248,6 +259,8 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face'):
     flat -= np.outer(flat @ up, up)
     rise = (soma_hips @ up - soma_ground) - soma_stand
     root = hips_rest + scale * flat + np.outer(scale * rise, up)
+    if start is not None:
+        root = root + (start[hips_b, :3, 3] - root[0])
 
     def fk(rotations_, root_):
         """Forward kinematics in armature space."""

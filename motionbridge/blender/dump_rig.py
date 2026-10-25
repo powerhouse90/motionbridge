@@ -1,8 +1,9 @@
 """Inspect a character file and write its armature as JSON. Never saves the source.
 
-blender -b --python-exit-code 1 --python dump_rig.py -- --file CHAR --out rig.json [--armature NAME]
+blender -b --python-exit-code 1 --python dump_rig.py -- --file CHAR --out rig.json [--armature NAME] [--frame N]
 
-Positions are Blender world space (Z-up, meters) with every object transform applied.
+Positions are Blender world space (Z-up, meters) with every object transform applied. Each bone's 'start' is its
+posed matrix at the start frame (the frame Render Starting Views draws, so the first frame of the video).
 """
 import argparse
 import json
@@ -24,10 +25,13 @@ def main():
     p.add_argument('--file', required=True)
     p.add_argument('--out', required=True)
     p.add_argument('--armature')
+    p.add_argument('--frame', type=int, default=1)
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     path = Path(a.file).resolve()
     load(path)
     rig = pick_armature(a.armature)
+    bpy.context.scene.frame_set(a.frame)
+    bpy.context.view_layer.update()
     to_world = rig.matrix_world
     # Vertices each bone actually moves: separates real bones from end markers and unused helpers.
     # Girth: median distance from a bone to the vertices it dominates (thin neck vs wide skull).
@@ -53,9 +57,10 @@ def main():
     bones = []
     for b in rig.data.bones:
         rest = to_world @ b.matrix_local
+        start = to_world @ rig.pose.bones[b.name].matrix
         bones.append({'name': b.name, 'parent': b.parent.name if b.parent else None,
                       'head': vec(to_world @ b.head_local), 'tail': vec(to_world @ b.tail_local),
-                      'rest': [vec(row) for row in rest], 'deform': b.use_deform, 'weighted_vertices': weighted.get(b.name, 0),
+                      'rest': [vec(row) for row in rest], 'start': [vec(row) for row in start], 'deform': b.use_deform, 'weighted_vertices': weighted.get(b.name, 0),
                       'girth': round(girth.get(b.name, 0.0), 5),
                       'children': [c.name for c in b.children]})
     meshes = []

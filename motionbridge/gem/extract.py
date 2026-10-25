@@ -15,9 +15,10 @@ from motionbridge import config as configuration
 STAGES = ['detect', 'pose', 'features', 'motion', 'export']
 
 
-def extract(video, out, gem_root, gem_python, focal_scale=1.0, env=None, interrupted=None):
+def extract(video, out, gem_root, gem_python, focal_scale=1.0, env=None, interrupted=None, stages=STAGES):
     """Run GEM on video into out/, resuming finished stages. env: environment for the GEM process.
-    interrupted: called while a stage runs; raise from it to cancel (the stage process is killed)."""
+    interrupted: called while a stage runs; raise from it to cancel (the stage process is killed).
+    stages: the stages to run (detect + pose alone give the 2D joints, capture/preprocess/vitpose.pt)."""
     video, out = Path(video).resolve(), Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(video.read_bytes()).hexdigest()
@@ -28,7 +29,7 @@ def extract(video, out, gem_root, gem_python, focal_scale=1.0, env=None, interru
             raise ValueError(f'{out} holds an extraction of different video bytes or lens; choose a new folder')
     receipt.write_text(json.dumps({'video': video.as_posix(), 'sha256': digest, 'focal_scale': focal_scale}, indent=1))
     backend = Path(__file__).with_name('backend.py')
-    for stage in STAGES:
+    for stage in stages:
         done = out / f'{stage}.done'
         if done.exists():
             continue
@@ -50,7 +51,7 @@ def extract(video, out, gem_root, gem_python, focal_scale=1.0, env=None, interru
         if process.returncode:
             raise RuntimeError(f'GEM stage {stage} failed:\n' + (out / f'{stage}.log').read_text()[-2000:])
         done.write_text('complete\n')
-    return out / 'motion_export.npz'
+    return out / 'motion_export.npz' if 'export' in stages else out / 'capture' / 'preprocess' / 'vitpose.pt'
 
 
 def main():

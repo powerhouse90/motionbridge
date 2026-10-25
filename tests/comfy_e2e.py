@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def graph(character, take, defaults, unet, accept, seed):
+def graph(character, take, defaults, unet, accept, seed, preview='follow', two_view=False):
     prompt = ' '.join([defaults['two_view_intro'], take['action'], defaults['outro']])
     return {
         'setup': {'class_type': 'MotionBridgeSetup', 'inputs': {'accept_licenses': accept, 'blender': 'use installed, else download'}},
@@ -50,13 +50,13 @@ def graph(character, take, defaults, unet, accept, seed):
                                                           'format': 'mp4', 'codec': 'auto'}},
         'motion': {'class_type': 'MotionBridgeVideoToMotion', 'inputs': {
             'images': ['decode', 0], 'fps': 24.0, 'panel': 'left half (front view of 2)',
-            'camera': 'rendered reference (orthographic)'}},
+            'camera': 'rendered reference (orthographic)', **({'camera_metadata': ['views', 4]} if two_view else {})}},
         'smooth': {'class_type': 'MotionBridgeSmoothMotion', 'inputs': {'motion': ['motion', 0], 'strength': 0.5}},
         'retarget': {'class_type': 'MotionBridgeRetarget', 'inputs': {
             'character': ['character', 0], 'motion': ['smooth', 0], 'action_name': take['name'], 'foot_ik': True}},
         'export': {'class_type': 'MotionBridgeExport', 'inputs': {
             'animation': ['retarget', 0], 'filename_prefix': 'motionbridge/character', 'glb': True,
-            'preview': 'follow'}},
+            'preview': preview}},
     }
 
 
@@ -67,10 +67,12 @@ def main():
     p.add_argument('--take', default='walk')
     p.add_argument('--unet', default='minimax_h3_fl2va_pruned_int8_convrot.safetensors')
     p.add_argument('--accept-licenses', action='store_true')
+    p.add_argument('--two-view', action='store_true', help='refine the motion with the three-quarter panel too')
+    p.add_argument('--preview', default='follow', help='export preview camera: follow, front, profile, whole path, none')
     a = p.parse_args()
     spec = tomllib.loads((ROOT / 'golden' / 'h3_takes.toml').read_text(encoding='utf-8'))
     take = next(t for t in spec['takes'] if t['name'] == a.take)
-    prompt = graph(a.character, take, spec['defaults'], a.unet, a.accept_licenses, spec['defaults']['seed'])
+    prompt = graph(a.character, take, spec['defaults'], a.unet, a.accept_licenses, spec['defaults']['seed'], a.preview, a.two_view)
     request = urllib.request.Request(a.url + '/prompt', json.dumps({'prompt': prompt}).encode(),
                                      {'Content-Type': 'application/json'})
     try:

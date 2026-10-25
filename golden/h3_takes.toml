@@ -52,3 +52,9 @@ name = "attack"
 layout = "front + 3/4"
 action = "Fighting-game attack: she drops into a bouncing fighting stance with fists up, throws a fast left jab and a hard right cross with full hip rotation, then pivots on her left foot into a high right roundhouse kick at head height, and lands back in her fighting stance. Snappy, powerful, athletic martial-arts motion. She stays in place facing the front camera, her whole body inside each panel."
 why = "Fast, dynamic motion: strikes must stay sharp through smoothing; single-leg pivot and high kick stress foot contacts and balance"
+
+[[takes]]
+name = "squat_kicks"
+layout = "front + 3/4"
+action = "Cossack squat dance (prisyadka): she drops into a deep crouch with her arms held out to the sides, and from the crouch kicks her legs out straight forward one after the other, right then left, in a quick bouncing rhythm, four kicks while staying low the whole time, then rises back to standing. She stays in place facing the front camera, her whole body inside each panel."
+why = "Expressive performance: deep crouch held while legs kick out, fast alternating single-leg support"
