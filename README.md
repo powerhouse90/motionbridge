@@ -116,4 +116,5 @@ bone head back from Blender, and saves a new BLEND plus an FBX with all actions.
 ## License
 
 Apache License 2.0. Models and assets used at runtime (H3, GEM, SAM 3D Body,
-MHR, Kimodo) keep their own licenses and are downloaded by the user.
+MHR, Kimodo) keep their own licenses and are downloaded by the user. For commercial use see
+[docs/licenses.md](docs/licenses.md); in the US, H3 needs MiniMax's commercial license.

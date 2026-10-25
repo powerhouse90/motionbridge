@@ -55,6 +55,9 @@ TORCH_INDEX = 'https://download.pytorch.org/whl/cu126'
 LICENSES = """MotionBridge downloads third-party software and model weights. By accepting you agree to their terms:
   GEM-X code (Apache-2.0) and GEM weights (NVIDIA Open Model License)   https://huggingface.co/nvidia/GEM-X
   SAM 3D Body weights, redistributed in the GEM-X repository (SAM License) https://github.com/facebookresearch/sam-3d-body
+  MHR body model, in the GEM-X weights (Apache-2.0)                       https://github.com/facebookresearch/MHR
+  YOLOX-x person detector weights, fetched by GEM (OpenMMLab; trained on Human-Art, non-commercial)
+                                                                           https://github.com/IDEA-Research/HumanArt
   SAM 2 code and weights (Apache-2.0)                                     https://github.com/facebookresearch/sam2
   SOMA body model (Apache-2.0)                                             https://github.com/NVlabs/SOMA-X
   Blender, if downloaded (GPL)                                             https://www.blender.org/about/license/

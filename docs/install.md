@@ -42,13 +42,16 @@
 MotionBridge is Apache-2.0. What Setup downloads keeps its own license, and you accept these by turning on
 `accept_licenses`:
 
-- GEM-X code (Apache-2.0) and weights (NVIDIA Open Model License)
-- SAM 3D Body weights (SAM License)
+- GEM-X code (Apache-2.0) and weights, including its 2D pose model (NVIDIA Open Model License)
+- SAM 3D Body weights (SAM License; note its clause on weapons)
+- MHR body model (Apache-2.0)
+- YOLOX-x person detector weights (OpenMMLab; trained on Human-Art, which is released for non-commercial use)
 - SAM 2 (Apache-2.0)
 - SOMA body model (Apache-2.0)
 - Blender (GPL)
 
-H3 is covered by its own model license.
+H3 is covered by its own model license. **For commercial use in the US, apply for MiniMax's H3 commercial
+license.** What each license allows for commercial use: [licenses.md](licenses.md).
 
 ## Updating
 
