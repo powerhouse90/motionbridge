@@ -33,7 +33,12 @@ Setup -> Load Character -> Render Starting Views -> H3 -> Video to Motion (GEM) 
 7. **Retarget Motion** onto your character, keeping its bone lengths:
    - `foot_ik` pins planted feet so they don't slide or sink;
    - `head` `face` aims the face where the performer's face points, `carriage` keeps your character's built-in
-     head pose and adds the change.
+     head pose and adds the change;
+   - `travel` `keep` leaves the travel on the hips. `in place` keeps walks and runs on the spot, for locomotion
+     driven by code. `root bone` moves the travel and turn onto the bone above the hips, for root motion in
+     Unreal or Unity Generic rigs (Unity Humanoid makes its own root motion from `keep`). A rig without a bone
+     above the hips keeps the travel on the hips; no bone is added, so the export still matches the character
+     already in your engine.
 8. **Export Animated Character**: BLEND + FBX (+ GLB), checked bone by bone against the retarget. Your source
    file is never modified. `preview` renders the textured character (`follow`, `front`, `profile`, `whole path`).
 

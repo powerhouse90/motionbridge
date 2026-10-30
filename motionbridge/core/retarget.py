@@ -161,7 +161,7 @@ def soma_facing(motion, face_start=True):
     return world, left, fwd
 
 
-def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', match_start=True):
+def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', match_start=True, travel='keep'):
     """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump.
     feet_ik pins planted feet (contacts detected on SOMA) with leg IK.
     head='face': the rig's face points where the performer's face points (world space).
@@ -171,7 +171,9 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     starting views drew), so the video's first frame is known exactly; each mapped bone's difference from it there
     is taken off every frame, and the hips start where the character stands. The extraction's guess of the start
     stance (feet too close, a foot forward) otherwise stays for the whole take. Off for footage that doesn't start
-    from the character's pose."""
+    from the character's pose.
+    travel: 'keep' (the hips carry the travel), 'in place' (the travel taken off) or 'root bone' (the travel and
+    turn moved onto the bone above the hips, for engine root motion; see _move_travel)."""
     bones = dump['bones']
     names = [b['name'] for b in bones]
     index = {n: i for i, n in enumerate(names)}
@@ -298,6 +300,10 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     if feet_ik:
         root, notes = _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd, lengths)
     pose = fk(target_rot, root)
+    notes = notes if feet_ik else []
+    if travel != 'keep':
+        notes.append(_move_travel(pose, travel, hips_b, parent, index, roles, up, motion.fps,
+                                  np.linalg.norm(obj[:3, :3], axis=0).mean()))
 
     # Local pose (Blender basis): rest_local^-1 @ parent_pose^-1 @ pose.
     basis = np.empty_like(pose)
@@ -317,7 +323,74 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     tails_arm = heads_arm + pose[..., :3, 1] * lengths[None, :, None]
     to_world = lambda x: x @ obj[:3, :3].T + obj[:3, 3]
     return Result(names, quats, basis[..., :3, 3], to_world(heads_arm), to_world(tails_arm), float(scale),
-                  motion.fps, {bone: sj for bone, sj, *_ in pairs}, locks, notes if feet_ik else [])
+                  motion.fps, {bone: sj for bone, sj, *_ in pairs}, locks, notes)
+
+
+
+TRAVEL_CUTOFF = 0.4  # Hz: the travel taken off the body is its path low-passed, well under a walk's step rate
+                     # (~1 Hz): at 1 Hz half of each step's sway and pelvis turn went onto the root
+TRAVEL_PAD = 2.0     # s: the path is carried on in a straight line past both ends while filtering, so the filter's
+                     # lag doesn't slow the root at the clip's ends (it ended 22 cm short; a looped clip popped)
+
+
+def _ground_path(pose, hips_b, index, roles, up, fps):
+    """The body's smoothed path along the floor (T, 3, from frame 0) and its smoothed turn about up (T, radians,
+    from frame 0; the hip line's direction)."""
+    from motionbridge.core.smooth import one_euro
+    flat = lambda v: v - np.outer(v @ up, up)
+    path = flat(pose[:, hips_b, :3, 3] - pose[0, hips_b, :3, 3])
+    across = flat(pose[:, index[roles['LeftLeg']], :3, 3] - pose[:, index[roles['RightLeg']], :3, 3])
+    ref = across[0] / np.linalg.norm(across[0])
+    turn = np.unwrap(np.arctan2(np.cross(ref, across) @ up, across @ ref))
+    x = np.c_[path, turn]
+    T, pad, k = len(x), int(TRAVEL_PAD * fps), max(min(int(fps), len(x) - 1), 1)  # end speeds over the last second
+    v0, v1 = (x[k] - x[0]) / k, (x[-1] - x[-1 - k]) / k
+    x = np.r_[x[0] - np.outer(np.arange(pad, 0, -1), v0), x, x[-1] + np.outer(np.arange(1, pad + 1), v1)]
+    x = one_euro(x, np.zeros(len(x)), fps, TRAVEL_CUTOFF, 0)[pad:pad + T]
+    x -= x[0]
+    return x[:, :3], x[:, 3]
+
+
+def _move_travel(pose, travel, hips_b, parent, index, roles, up, fps, unit=1.0):
+    """Takes the travel off the posed body (pose, armature space, changed in place); returns a note (unit: metres
+    per armature unit).
+    'in place': the hips and everything below them are shifted back by the smoothed path, so the body walks on the
+    spot and keeps its turn; bones above and beside the hips (an engine root, IK targets) stay still.
+    'root bone': the bone above the hips (the engine's root) carries the smoothed path and turn, turning about the
+    hips; the hips and everything below them keep their world pose, so the clip looks the same in Blender, and the
+    root's other children (UE's ik_foot_root, ik_hand_root) move with it. A rig without a bone above the hips keeps
+    the travel on the hips (a new bone would no longer match the character already in the engine)."""
+    def below(i):
+        out = {i}
+        for _ in range(len(parent)):  # the chain is at most that deep
+            more = {j for j, q in enumerate(parent) if q in out} - out
+            if not more:
+                return sorted(out)
+            out |= more
+        return sorted(out)
+    body = below(hips_b)
+    path, turn = _ground_path(pose, hips_b, index, roles, up, fps)
+    if travel == 'in place':
+        moved = pose[:, body]
+        moved[..., :3, 3] -= path[:, None]
+        pose[:, body] = moved
+        return f'in place: {unit * np.linalg.norm(path[-1]):.2f} m of travel taken off'
+    if travel != 'root bone':
+        raise ValueError(f'travel: keep, in place or root bone, not {travel!r}')
+    r = parent[hips_b]
+    if r is None:
+        return 'root bone: the rig has no bone above the hips; travel kept on the hips'
+    spin = Rotation.from_rotvec(np.outer(turn, up)).as_matrix()
+    old = pose[:, r].copy()
+    arm = pose[0, r, :3, 3] - pose[0, hips_b, :3, 3]
+    arm -= up * (arm @ up)  # the root's floor offset from the hips at the start, turned with the body
+    pose[:, r, :3, :3] = spin @ pose[0, r, :3, :3]
+    pose[:, r, :3, 3] = pose[0, r, :3, 3] + path + spin @ arm - arm
+    carried = [j for j in below(r) if j != r and j not in body]
+    if carried:
+        follow = pose[:, r] @ np.linalg.inv(old)
+        pose[:, carried] = follow[:, None] @ pose[:, carried]
+    return f'root bone: {unit * np.linalg.norm(path[-1]):.2f} m of travel and {np.degrees(turn[-1]):.0f} deg of turn on the root'
 
 
 BLEND = 5        # frames to ease into and out of a plant

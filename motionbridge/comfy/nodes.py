@@ -292,18 +292,24 @@ class Retarget(io.ComfyNode):
                 io.Combo.Input('head', options=['face', 'carriage'], default='face', advanced=True, optional=True,
                                tooltip='face: the face points where the performer\'s face points. carriage: keep '
                                        'the character\'s built-in head pose and add the performer\'s change.'),
+                io.Combo.Input('travel', options=['keep', 'in place', 'root bone'], default='keep', optional=True,
+                               tooltip='keep: the hips carry the travel. in place: walks and runs stay on the spot '
+                                       '(locomotion driven by code). root bone: the travel and turn go on the bone '
+                                       'above the hips, for root motion in Unreal / Unity (Generic); a rig without one keeps '
+                                       'the travel on the hips.'),
             ],
             outputs=[Animation.Output(display_name='animation'), io.String.Output(display_name='report')])
 
     @classmethod
-    def execute(cls, character, motion, action_name, foot_ik, head='face'):
+    def execute(cls, character, motion, action_name, foot_ik, head='face', travel='keep'):
         from motionbridge.core import retarget, rigmap, soma
         name = ''.join(c if c.isalnum() or c in '-_' else '_' for c in action_name) or 'motion'
         dump = json.loads(Path(character['dump']).read_text())
         folder = output_folder('animation', digest(Path(character['dump']), Path(motion['file']), foot_ik, head,
-                                                   Path(retarget.__file__)))
+                                                   travel, Path(retarget.__file__)))
         result_file = folder / f"{character['name']}__{name}.npz"
-        result = retarget.retarget(soma.load(motion['file']), dump, rigmap.build(dump), feet_ik=foot_ik, head=head)
+        result = retarget.retarget(soma.load(motion['file']), dump, rigmap.build(dump), feet_ik=foot_ik, head=head,
+                                   travel=travel)
         result.save(result_file)
         report = f"{character['name']} / {name}: {result.quaternions.shape[0]} frames at {result.fps:g} fps, " \
                  f"scale {result.scale:.2f}\n" + '\n'.join(result.notes or [])
