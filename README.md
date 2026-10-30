@@ -7,6 +7,19 @@ NVIDIA GEM, or text through NVIDIA Kimodo) writes one canonical skeleton, SOMA's
 77 joints. Cleanup runs once on that skeleton. A generic retargeter then maps it
 onto any humanoid rig without per-character calibration.
 
+[![MotionBridge demo video](https://img.youtube.com/vi/r-V-FMUbeIc/maxresdefault.jpg)](https://youtu.be/r-V-FMUbeIc)
+
+Left: the H3 video. Right: the same motion on a rigged character in Blender, ready to export.
+
+| Full body | |
+| --- | --- |
+| ![Kick: H3 and the retargeted character](docs/media/kick.gif) | ![Climbing a wall prop](docs/media/climb.gif) |
+
+| First person | |
+| --- | --- |
+| ![Rifle reload](docs/media/rifle_reload.gif) | ![Pistol grab](docs/media/pistol_grab.gif) |
+| ![Typing and mouse](docs/media/typing.gif) | |
+
 ## Workflows and guides
 
 Drag a workflow from [`workflows/`](workflows) into ComfyUI. Each one has notes on every step.
