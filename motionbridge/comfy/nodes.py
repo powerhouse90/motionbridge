@@ -28,6 +28,7 @@ Animation = io.Custom('MOTIONBRIDGE_ANIMATION')
 
 PANELS = {'whole frame': (0, 1), 'left half (front view of 2)': (0, 2), 'left third (front view of 3)': (0, 3)}
 LENSES = {'rendered reference (orthographic)': 8.0, 'real camera': 1.0}
+LOOP_WARN = 5.0  # degrees: a cut matching its start worse than this isn't a clean loop
 
 
 class Setup(io.ComfyNode):
@@ -274,7 +275,52 @@ class AnimationSpacing(io.ComfyNode):
         if not out.exists():
             spacing.respace(soma.load(motion['file']), ease_in=ease_in, snap=ease_out, overshoot=overshoot,
                             skip=skip_frames, skip_above=skip_above)[0].save(out)
-        return io.NodeOutput({**motion, 'file': str(out)})
+        # respacing moves frames, so a loop cut before it no longer lines up: loop after spacing
+        return io.NodeOutput({**{k: v for k, v in motion.items() if k != 'loop'}, 'file': str(out)})
+
+
+class MakeLoop(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id='MotionBridgeMakeLoop', display_name='Make Loop', category='MotionBridge',
+            description='Cut one seamless cycle out of a take, for clips a game plays on repeat (walk, run, idle). '
+                        'Finds the cycle whose end best matches its start and crossfades the cut into the take\'s own '
+                        'continuation. Retarget Motion then exports just that cycle, with clean feet across the seam. '
+                        'Use after Smooth Motion / Animation Spacing.',
+            inputs=[
+                Motion.Input('motion'),
+                io.Float.Input('cycle_min', default=0.6, min=0.2, max=10.0, step=0.1,
+                               tooltip='Seconds: shortest cycle searched. A walk cycle is two steps (~1-1.6 s).'),
+                io.Float.Input('cycle_max', default=4.0, min=0.3, max=20.0, step=0.1,
+                               tooltip='Seconds: longest cycle searched.'),
+                io.Int.Input('crossfade', default=8, min=1, max=48, tooltip='Frames blended at the seam.'),
+                io.Int.Input('start_frame', default=-1, min=-1, max=100000, advanced=True, optional=True,
+                             tooltip='Pin the cycle\'s first frame (-1 = search).'),
+                io.Int.Input('end_frame', default=-1, min=-1, max=100000, advanced=True, optional=True,
+                             tooltip='Pin the frame where the cycle starts again (-1 = search).'),
+            ],
+            outputs=[Motion.Output(display_name='motion'), io.String.Output(display_name='report')])
+
+    @classmethod
+    def execute(cls, motion, cycle_min, cycle_max, crossfade, start_frame=-1, end_frame=-1):
+        from motionbridge.core import loop, soma
+        src = Path(motion['file'])
+        out = src.with_name(f'{src.stem}_loop{digest(cycle_min, cycle_max, crossfade, start_frame, end_frame, Path(loop.__file__))[:8]}.npz')
+        take = soma.load(motion['file'])
+        S, E, cost = loop.find(take, blend=crossfade, cycle=(cycle_min, cycle_max),
+                               start=None if start_frame < 0 else start_frame, end=None if end_frame < 0 else end_frame)
+        looped, info = loop.make(take, S, E, blend=crossfade)
+        if not out.exists():
+            looped.save(out)
+        report = (f'cycle: frames {S}-{E - 1} of {take.frames} ({(E - S) / take.fps:.2f} s); the cut matches its start '
+                  f'within {cost:.1f} deg on average; '
+                  + (f'travels {info["travel_m"]:.2f} m a cycle' if info['travels'] else 'stays in place'))
+        if cost > LOOP_WARN:
+            report += (f'\nWARNING: no clean cycle in this take ({cost:.1f} deg apart at the cut). A loop needs a '
+                       'repeating action (walk, run, idle); try another cycle length or a longer take.')
+        return io.NodeOutput({**motion, 'file': str(out), 'loop': {'start': info['start'], 'frames': info['frames']}},
+                             report, ui=ui.PreviewText(report))
 
 
 class Retarget(io.ComfyNode):
@@ -305,11 +351,12 @@ class Retarget(io.ComfyNode):
         from motionbridge.core import retarget, rigmap, soma
         name = ''.join(c if c.isalnum() or c in '-_' else '_' for c in action_name) or 'motion'
         dump = json.loads(Path(character['dump']).read_text())
+        cycle = motion.get('loop')
         folder = output_folder('animation', digest(Path(character['dump']), Path(motion['file']), foot_ik, head,
-                                                   travel, Path(retarget.__file__)))
+                                                   travel, str(cycle), Path(retarget.__file__)))
         result_file = folder / f"{character['name']}__{name}.npz"
         result = retarget.retarget(soma.load(motion['file']), dump, rigmap.build(dump), feet_ik=foot_ik, head=head,
-                                   travel=travel)
+                                   travel=travel, loop=(cycle['start'], cycle['frames']) if cycle else None)
         result.save(result_file)
         report = f"{character['name']} / {name}: {result.quaternions.shape[0]} frames at {result.fps:g} fps, " \
                  f"scale {result.scale:.2f}\n" + '\n'.join(result.notes or [])
@@ -378,4 +425,4 @@ class Export(io.ComfyNode):
         return io.NodeOutput(video_out, text, ui=ui_out)
 
 
-NODES = [Setup, LoadCharacter, VideoToMotion, SmoothMotion, AnimationSpacing, Retarget, Export]
+NODES = [Setup, LoadCharacter, VideoToMotion, SmoothMotion, AnimationSpacing, MakeLoop, Retarget, Export]

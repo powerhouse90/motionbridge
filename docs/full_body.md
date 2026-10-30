@@ -30,7 +30,17 @@ Setup -> Load Character -> Render Starting Views -> H3 -> Video to Motion (GEM) 
    - `overshoot`: how far it carries past the extreme before settling back;
    - `skip_frames` / `skip_above`: where a hand or foot moves faster than `skip_above` m/s, that share of frames is
      cut so the limb jumps, for impact. Slower moves are only respaced. `skip_frames` 0 turns it off.
-7. **Retarget Motion** onto your character, keeping its bone lengths:
+7. **Make Loop** (optional, for walks, runs and idles a game plays on repeat) cuts one seamless cycle out of the
+   take: it finds the cycle whose end best matches its start and crossfades the cut into the take's own
+   continuation. Retarget Motion then exports just that cycle, with clean feet across the seam, ending on a copy
+   of its first frame as engines expect of a loop. Pair it with `travel` `in place` or `root bone` for locomotion.
+   - `cycle_min` / `cycle_max`: seconds searched. A walk cycle is two steps, about 1-1.6 s;
+   - `crossfade`: frames blended at the seam;
+   - `start_frame` / `end_frame` (advanced): pin the cycle instead of searching.
+
+   The report gives how well the cut matches its start and warns when the take has no clean cycle (a one-off
+   action like an attack). Use it after Animation Spacing, which retimes frames.
+8. **Retarget Motion** onto your character, keeping its bone lengths:
    - `foot_ik` pins planted feet so they don't slide or sink;
    - `head` `face` aims the face where the performer's face points, `carriage` keeps your character's built-in
      head pose and adds the change;
@@ -39,7 +49,7 @@ Setup -> Load Character -> Render Starting Views -> H3 -> Video to Motion (GEM) 
      Unreal or Unity Generic rigs (Unity Humanoid makes its own root motion from `keep`). A rig without a bone
      above the hips keeps the travel on the hips; no bone is added, so the export still matches the character
      already in your engine.
-8. **Export Animated Character**: BLEND + FBX (+ GLB), checked bone by bone against the retarget. Your source
+9. **Export Animated Character**: BLEND + FBX (+ GLB), checked bone by bone against the retarget. Your source
    file is never modified. `preview` renders the textured character (`follow`, `front`, `profile`, `whole path`).
 
 ## Tips

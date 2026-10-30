@@ -161,7 +161,8 @@ def soma_facing(motion, face_start=True):
     return world, left, fwd
 
 
-def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', match_start=True, travel='keep'):
+def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', match_start=True, travel='keep',
+             loop=None):
     """motion: SomaMotion; dump: dump_rig.py JSON; rigmap: RigMap for that dump.
     feet_ik pins planted feet (contacts detected on SOMA) with leg IK.
     head='face': the rig's face points where the performer's face points (world space).
@@ -173,7 +174,11 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     stance (feet too close, a foot forward) otherwise stays for the whole take. Off for footage that doesn't start
     from the character's pose.
     travel: 'keep' (the hips carry the travel), 'in place' (the travel taken off) or 'root bone' (the travel and
-    turn moved onto the bone above the hips, for engine root motion; see _move_travel)."""
+    turn moved onto the bone above the hips, for engine root motion; see _move_travel).
+    loop: (start, frames) of one cycle of a loop.make() motion: the result is that cycle alone plus a closing frame
+    (the next cycle's first, so the clip ends on its own start, as engines and Blender's cyclic animation expect),
+    cut out after the feet are planted and the travel moved (the cycles around it give both sides of the seam the
+    same context), and placed where the take's first frame stands."""
     bones = dump['bones']
     names = [b['name'] for b in bones]
     index = {n: i for i, n in enumerate(names)}
@@ -304,6 +309,36 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     if travel != 'keep':
         notes.append(_move_travel(pose, travel, hips_b, parent, index, roles, up, motion.fps,
                                   np.linalg.norm(obj[:3, :3], axis=0).mean()))
+    if loop is not None:
+        a, T = loop
+        if a < 0 or a + T >= len(pose):
+            raise ValueError(f'loop cycle {a}..{a + T} is outside the {len(pose)}-frame motion')
+        # the closing frame against the first (the same pose, if the loop is clean), and the cycle's last real step
+        # (onto the closing frame, which a game then shows as the first) against its other frame-to-frame turns
+        turn = lambda A, B: np.degrees(np.arccos(np.clip((np.trace(np.swapaxes(A, -1, -2) @ B, axis1=-2, axis2=-1) - 1) / 2, -1, 1)))
+        close = turn(pose[a, :, :3, :3], pose[a + T, :, :3, :3])
+        seam = turn(pose[a + T - 1, :, :3, :3], pose[a, :, :3, :3])
+        usual = turn(pose[a:a + T - 1, :, :3, :3], pose[a + 1:a + T, :, :3, :3])
+        top = parent[hips_b] if travel == 'root bone' and parent[hips_b] is not None else hips_b
+        lap = pose[a + T, top, :3, 3] - pose[a, top, :3, 3]
+        lap = np.linalg.norm(lap - up * (lap @ up)) * np.linalg.norm(obj[:3, :3], axis=0).mean()
+        if travel != 'keep':
+            notes.pop()  # _move_travel's note covers the laid-down cycles, not the one kept
+        notes.append(f'loop: {T} frames + a closing frame (bones within {close.max():.2f} deg of the first), '
+                     f'{lap:.2f} m of travel on the {names[top]} a cycle; the wrap turns bones {seam.mean():.2f} deg on '
+                     f'average (max {seam.max():.1f}); within the cycle a frame turns them {np.median(usual.mean(1)):.2f} '
+                     f'(max {usual.max():.1f})')
+        first = pose[0].copy()
+        pose = pose[a:a + T + 1].copy()
+        T += 1
+        moved = _below(parent, top)
+        shift = pose[0, top, :3, 3] - first[top, :3, 3]
+        shift -= up * (shift @ up)  # the cycle starts where the take did
+        sub = pose[:, moved]
+        sub[..., :3, 3] -= shift
+        pose[:, moved] = sub
+        if locks is not None:
+            locks = {side: list(v[a:a + T]) for side, v in locks.items()}  # T is the cut's length by now
 
     # Local pose (Blender basis): rest_local^-1 @ parent_pose^-1 @ pose.
     basis = np.empty_like(pose)
@@ -325,6 +360,18 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     return Result(names, quats, basis[..., :3, 3], to_world(heads_arm), to_world(tails_arm), float(scale),
                   motion.fps, {bone: sj for bone, sj, *_ in pairs}, locks, notes)
 
+
+
+
+def _below(parent, i):
+    """Bone i and every bone under it."""
+    out = {i}
+    for _ in range(len(parent)):  # the chain is at most that deep
+        more = {j for j, q in enumerate(parent) if q in out} - out
+        if not more:
+            break
+        out |= more
+    return sorted(out)
 
 
 TRAVEL_CUTOFF = 0.4  # Hz: the travel taken off the body is its path low-passed, well under a walk's step rate
@@ -360,14 +407,7 @@ def _move_travel(pose, travel, hips_b, parent, index, roles, up, fps, unit=1.0):
     hips; the hips and everything below them keep their world pose, so the clip looks the same in Blender, and the
     root's other children (UE's ik_foot_root, ik_hand_root) move with it. A rig without a bone above the hips keeps
     the travel on the hips (a new bone would no longer match the character already in the engine)."""
-    def below(i):
-        out = {i}
-        for _ in range(len(parent)):  # the chain is at most that deep
-            more = {j for j, q in enumerate(parent) if q in out} - out
-            if not more:
-                return sorted(out)
-            out |= more
-        return sorted(out)
+    below = lambda i: _below(parent, i)
     body = below(hips_b)
     path, turn = _ground_path(pose, hips_b, index, roles, up, fps)
     if travel == 'in place':
