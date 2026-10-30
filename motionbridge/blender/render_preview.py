@@ -57,6 +57,8 @@ def main():
                    help='profile view: thigh bones that give the body left-right axis each frame')
     p.add_argument('--square-pair', nargs=2, metavar=('LEFT', 'RIGHT'),
                    help='square the camera to this pair instead (e.g. upper arms, to judge the upper body)')
+    p.add_argument('--box', action='append', default=[], metavar='CX,CY,CZ,SX,SY,SZ,YAW[,PITCH]',
+                   help='a plain grey box prop (world centre, full size in m, yaw and pitch in degrees); repeatable')
     a = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     outdir = Path(a.outdir).resolve()
     bpy.ops.wm.open_mainfile(filepath=str(Path(a.blend).resolve()))
@@ -71,6 +73,15 @@ def main():
     floor_z = min(q.z for q in mesh_points(meshes, 1))
     rig.data.pose_position = 'POSE'
     floor = add_floor(floor_z)
+    for spec in a.box:  # props the performer touches (a stool, a wall); not part of the framing
+        cx, cy, cz, sx, sy, sz, yaw, pitch = ([float(v) for v in spec.split(',')] + [0.0])[:8]
+        bpy.ops.mesh.primitive_cube_add(size=1, location=(cx, cy, cz), rotation=(math.radians(pitch), 0, math.radians(yaw)))
+        box = bpy.context.active_object
+        box.scale = (sx, sy, sz)
+        mat = bpy.data.materials.new('prop_grey')
+        mat.use_nodes = True
+        mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value = (0.45, 0.46, 0.48, 1)
+        box.data.materials.append(mat)
 
     scene.render.engine = 'BLENDER_EEVEE'
     scene.eevee.taa_render_samples = 8

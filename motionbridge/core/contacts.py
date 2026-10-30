@@ -58,12 +58,18 @@ def _clean(mask):
     return m
 
 
+FIXED_FLOOR = False   # True: one floor height for the whole clip, where the feet start (climbs: feet on a wall
+                      # would otherwise be read as the floor rising with them)
+
+
 def ground_track(motion, window_s=1.5):
-    """Floor height per frame. Video reconstruction lets the floor drift (several cm over a few
+    """Floor height per frame (constant with FIXED_FLOOR: the lowest foot over the first second). Video reconstruction lets the floor drift (several cm over a few
     seconds), so use a smoothed rolling minimum of the lowest foot joint instead of one constant.
     The window is long enough to span a jump's airtime."""
     feet = [motion.index(f'{s}{x}') for s in ('Left', 'Right') for x in ('Foot', 'ToeBase')]
     low = motion.positions[:, feet, SOMA_UP].min(axis=1)
+    if FIXED_FLOOR:
+        return np.full(len(low), low[:max(1, int(motion.fps))].min())
     half = max(1, int(window_s * motion.fps / 2))
     padded = np.pad(low, half, mode='edge')
     rolling = np.array([padded[t:t + 2 * half + 1].min() for t in range(len(low))])

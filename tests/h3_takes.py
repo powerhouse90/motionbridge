@@ -74,6 +74,13 @@ def queue(config, only=None):
         prompt['10']['inputs'].update(prompt=' '.join([intro, take['action'], defaults['outro']]),
                                       length=take.get('frames', defaults['frames']))
         prompt['4']['inputs']['unet_name'] = defaults['unet_name']
+        if defaults.get('no_attention_patch'):  # an install without KJNodes' attention patch: model straight through
+            patch = next(k for k, v in prompt.items() if v['class_type'] == 'MiniMaxH3MemoryEfficientSageAttentionPatch')
+            src = prompt.pop(patch)['inputs']['model']
+            for v in prompt.values():
+                for k, x in v['inputs'].items():
+                    if isinstance(x, list) and x and x[0] == patch:
+                        v['inputs'][k] = src
         prompt['11']['inputs']['noise_seed'] = defaults['seed']
         prompt['19']['inputs']['filename_prefix'] = f"video/MotionBridge_{defaults.get('prefix', 'golden')}_{take['name']}"
         (out / 'prompt_api.json').write_text(json.dumps(prompt, indent=1))
@@ -182,7 +189,7 @@ def main():
     p.add_argument('command', choices=['queue', 'collect', 'status', 'reimport'])
     p.add_argument('--only', nargs='*', help='take names (queue only)')
     a = p.parse_args()
-    config = configuration.load()
+    config = configuration.load(os.environ.get('MB_CONFIG'))  # another config.toml (MB_CONFIG=...)
     if a.command == 'queue':
         queue(config, a.only)
     else:
