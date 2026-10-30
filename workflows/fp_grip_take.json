@@ -864,7 +864,11 @@
    "widgets_values": [
     24.0,
     0.7,
-    "both"
+    "both",
+    "classic",
+    8,
+    true,
+    0.0
    ],
    "size": [
     360,
@@ -1582,7 +1586,11 @@
    "widgets_values": [
     24.0,
     0.7,
-    "both"
+    "both",
+    "classic",
+    8,
+    true,
+    0.0
    ],
    "size": [
     360,

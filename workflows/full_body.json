@@ -1,8 +1,8 @@
 {
  "id": "a1909091-46c7-551d-a9c2-f9757230a1ed",
  "revision": 0,
- "last_node_id": 25,
- "last_link_id": 28,
+ "last_node_id": 26,
+ "last_link_id": 29,
  "nodes": [
   {
    "id": 1,
@@ -22,7 +22,7 @@
    "outputs": [],
    "properties": {},
    "widgets_values": [
-    "# MotionBridge: full body\nType an action, get it on **your own rigged character**.\n\n1. **Setup**: turn on `accept_licenses` once. The first Run downloads GEM-X, its Python environment and\n   Blender (if none is installed) into `ComfyUI/models/motionbridge`. Later runs skip this.\n2. **Load Character**: upload a BLEND / GLB / GLTF / FBX with a humanoid skeleton (any bone names and\n   proportions). Pack textures into a BLEND first.\n3. **Render Starting Views** renders matching front + three-quarter views for H3.\n4. **H3** animates them. Edit the prompt: keep the two-panel wording, change the action.\n5. **Video to Motion (GEM)** reads 77-joint 3D motion from the left (front) panel.\n6. **Smooth**, **Retarget** onto your rig (feet pinned), **Export** BLEND + FBX + GLB and a preview.\n\n8 GB GPU: Video to Motion unloads H3 before GEM runs."
+    "# MotionBridge: full body\nType an action, get it on **your own rigged character**.\n\n1. **Setup**: turn on `accept_licenses` once. The first Run downloads GEM-X, its Python environment and\n   Blender (if none is installed) into `ComfyUI/models/motionbridge`. Later runs skip this.\n2. **Load Character**: upload a BLEND / GLB / GLTF / FBX with a humanoid skeleton (any bone names and\n   proportions). Pack textures into a BLEND first.\n3. **Render Starting Views** renders matching front + three-quarter views for H3.\n4. **H3** animates them. Edit the prompt: keep the two-panel wording, change the action.\n5. **Video to Motion (GEM)** reads 77-joint 3D motion from the left (front) panel.\n6. **Smooth**, **Animation Spacing** (ease in, fast middle, ease out, settle; frames skipped on the fastest stretches),\n   **Retarget** onto your rig (feet pinned), **Export** BLEND + FBX + GLB and a preview.\n\n8 GB GPU: Video to Motion unloads H3 before GEM runs."
    ],
    "color": "#432",
    "bgcolor": "#653"
@@ -84,7 +84,7 @@
      "type": "MOTIONBRIDGE_CHARACTER",
      "links": [
       2,
-      26
+      27
      ]
     },
     {
@@ -911,6 +911,12 @@
      "type": "VIDEO",
      "link": null,
      "shape": 7
+    },
+    {
+     "name": "camera_metadata",
+     "type": "STRING",
+     "link": null,
+     "shape": 7
     }
    ],
    "outputs": [
@@ -957,7 +963,7 @@
      "name": "motion",
      "type": "MOTIONBRIDGE_MOTION",
      "links": [
-      27
+      26
      ]
     }
    ],
@@ -974,24 +980,65 @@
   },
   {
    "id": 24,
-   "type": "MotionBridgeRetarget",
+   "type": "MotionBridgeAnimationSpacing",
    "pos": [
-    4180,
-    -40
+    3770,
+    280
    ],
    "flags": {},
    "order": 23,
    "mode": 0,
    "inputs": [
     {
+     "name": "motion",
+     "type": "MOTIONBRIDGE_MOTION",
+     "link": 26
+    }
+   ],
+   "outputs": [
+    {
+     "name": "motion",
+     "type": "MOTIONBRIDGE_MOTION",
+     "links": [
+      28
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MotionBridgeAnimationSpacing"
+   },
+   "widgets_values": [
+    3.0,
+    1.2,
+    0.25,
+    0.5,
+    5.0
+   ],
+   "size": [
+    380,
+    230
+   ]
+  },
+  {
+   "id": 25,
+   "type": "MotionBridgeRetarget",
+   "pos": [
+    4180,
+    -40
+   ],
+   "flags": {},
+   "order": 24,
+   "mode": 0,
+   "inputs": [
+    {
      "name": "character",
      "type": "MOTIONBRIDGE_CHARACTER",
-     "link": 26
+     "link": 27
     },
     {
      "name": "motion",
      "type": "MOTIONBRIDGE_MOTION",
-     "link": 27
+     "link": 28
     }
    ],
    "outputs": [
@@ -999,7 +1046,7 @@
      "name": "animation",
      "type": "MOTIONBRIDGE_ANIMATION",
      "links": [
-      28
+      29
      ]
     },
     {
@@ -1022,20 +1069,20 @@
    ]
   },
   {
-   "id": 25,
+   "id": 26,
    "type": "MotionBridgeExport",
    "pos": [
     4570,
     -40
    ],
    "flags": {},
-   "order": 24,
+   "order": 25,
    "mode": 0,
    "inputs": [
     {
      "name": "animation",
      "type": "MOTIONBRIDGE_ANIMATION",
-     "link": 28
+     "link": 29
     }
    ],
    "outputs": [
@@ -1267,25 +1314,33 @@
   ],
   [
    26,
-   3,
-   0,
-   24,
-   0,
-   "MOTIONBRIDGE_CHARACTER"
-  ],
-  [
-   27,
    23,
    0,
    24,
-   1,
+   0,
    "MOTIONBRIDGE_MOTION"
+  ],
+  [
+   27,
+   3,
+   0,
+   25,
+   0,
+   "MOTIONBRIDGE_CHARACTER"
   ],
   [
    28,
    24,
    0,
    25,
+   1,
+   "MOTIONBRIDGE_MOTION"
+  ],
+  [
+   29,
+   25,
+   0,
+   26,
    0,
    "MOTIONBRIDGE_ANIMATION"
   ]
