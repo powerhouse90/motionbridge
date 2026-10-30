@@ -404,6 +404,9 @@ ROOT_STILL_FEET = True  # only still planted feet steer the root (see _plant_fee
 STILL_REST, STILL_MOVE = 0.005, 0.02  # leg lengths per frame (~0.1 and ~0.4 m/s at 24 fps): full say / none
 ROOT_HEIGHT_HIGHEST = True  # root height from the planted foot that needs it highest (see _plant_feet)
 STRAIGHT_KNEE = 25.0        # degrees of knee bend: below it a stance leg counts as straight (the highest-foot rule)
+REACH_FLAT_ONLY = True  # a stance leg straightens to reach its pin only on a flat foot (see _plant_feet)
+REACH_FADE = 4          # frames: that reach fades out before the heel lifts
+KNEE_RAMP = 10.0            # degrees past STRAIGHT_KNEE over which a stance leg goes from keeping its length to reaching its pin
 ROOT_SMOOTH = 2         # frames; halves body wobble at foot hand-offs. Was 0 when it caused 15-degree knee
                         # snaps, before KEEP_LEG_LENGTH; re-tested with it: no new snaps
 KEEP_LEG_LENGTH = True  # stance legs keep their transferred length (see the IK below)
@@ -450,7 +453,7 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
     pose = fk(target_rot, root)
     T = len(root)
     flat = lambda v: v - np.outer(v @ up, up)
-    goals, legs, legs_weight, target_full = {}, {}, {}, {}
+    goals, legs, legs_weight, target_full, flat_foot = {}, {}, {}, {}, {}
     for side in ('Left', 'Right'):
         if not all(side + r in roles for r in ('Leg', 'Shin', 'Foot')):
             continue
@@ -462,6 +465,22 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         ankle, toe_p = pose[:, f, :3, 3], (pose[:, toe, :3, 3] if toe is not None else None)
         ankle_h = rest[f, :3, 3] @ up
         labels = locks[side] if toe is not None else ['heel' if x else None for x in locks[side]]
+        # Where a stance leg may reach for its pin (see the IK): a flat foot, faded out over the plant's last frames,
+        # where the heel is already peeling. Reaching there (or rolling onto the toe) straightened the push-off leg
+        # for a frame or two, and it popped back bent when the foot let go: a knee snap at every toe-off.
+        on_heel = np.array([x == 'heel' for x in labels], float)
+        for t in range(T):
+            if on_heel[t]:
+                left = next((k for k in range(1, REACH_FADE + 1) if t + k >= T or not on_heel[t + k]), None)
+                if left is not None and t + left < T:
+                    on_heel[t] = (left - 1) / REACH_FADE
+        for t in range(1, T):  # ...and eased in over the frames before a landing, as the goal is (no snap on contact)
+            if labels[t] == 'heel' and labels[t - 1] != 'heel':
+                for k in range(1, BLEND + 1):
+                    if t - k < 0 or labels[t - k] == 'heel':
+                        break
+                    on_heel[t - k] = max(on_heel[t - k], _ease(1 - k / (BLEND + 1)))
+        flat_foot[side] = on_heel
         target = np.full((T, 3), np.nan)
         # Planted joints are pinned horizontally. Their height follows the source's own rise above its
         # lowest point in that plant, so heel peels and toe rolls come through instead of being held
@@ -661,7 +680,10 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             # that GEM lands lower than the rig's legs put it hangs above the floor (up to 19 cm on a jump).
             u, w_ = H - K, A - K
             bend = 180 - np.degrees(np.arccos(np.clip((u * w_).sum(1) / np.linalg.norm(u, axis=1) / np.linalg.norm(w_, axis=1), -1, 1)))
-            keep = np.where(bend < STRAIGHT_KNEE, keep, np.linalg.norm(v, axis=1))
+            reach = np.clip((bend - STRAIGHT_KNEE) / KNEE_RAMP, 0, 1) if KNEE_RAMP > 0 else (bend >= STRAIGHT_KNEE)
+            if REACH_FLAT_ONLY:  # bending more to reach is always fine; straightening only on a flat foot
+                reach = np.where(np.linalg.norm(v, axis=1) < keep, reach, reach * flat_foot[side][frames])
+            keep = keep + reach * (np.linalg.norm(v, axis=1) - keep)
             # ...except where that would put the planted ankle below the floor: bend just enough.
             floor_h = rest[f, :3, 3] @ up
             dz = (v / np.linalg.norm(v, axis=1, keepdims=True)) @ up
