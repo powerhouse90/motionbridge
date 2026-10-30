@@ -64,7 +64,8 @@ uploading it; Load Character warns when textures are missing.
 | Load Character | Finds hips, spine, neck, head, arms, legs, feet and fingers by shape |
 | Render Starting Views | Matching front / three-quarter (/ hands) views of the character for H3 |
 | Video to Motion (GEM) | 77-joint 3D motion from H3 output or any video |
-| Retarget Motion | Motion onto the character, its proportions kept, planted feet pinned |
+| Make Loop | One seamless cycle of a walk, run or idle, for clips a game plays on repeat |
+| Retarget Motion | Motion onto the character, its proportions kept, planted feet pinned; travel kept, in place or on the root bone |
 | Export Animated Character | BLEND + FBX + GLB, checked bone by bone, plus a preview video |
 | Load FP Scene | First person: finds the FPS arms, hands and main prop; renders the (capture-mode) start frame |
 | Track FP Hands | First person: arms, wrists, every finger and the held prop fitted to the H3 take |
