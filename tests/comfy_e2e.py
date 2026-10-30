@@ -36,7 +36,7 @@ def graph(character, take, defaults, unet, accept, seed, preview='follow', two_v
         'vae': {'class_type': 'VAELoader', 'inputs': {'vae_name': 'minimax_h3_video_vae_fp16.safetensors'}},
         'h3': {'class_type': 'MiniMaxH3ImageToVideo', 'inputs': {
             'clip': ['clip', 0], 'vae': ['vae', 0], 'prompt': prompt, 'width': ['size', 0], 'height': ['size', 1],
-            'length': defaults['frames'], 'first_frame': ['scale', 0]}},
+            'length': take.get('frames', defaults['frames']), 'first_frame': ['scale', 0]}},
         'noise': {'class_type': 'RandomNoise', 'inputs': {'noise_seed': seed}},
         'guider': {'class_type': 'BasicGuider', 'inputs': {'model': ['lora', 0], 'conditioning': ['h3', 0]}},
         'sampler': {'class_type': 'KSamplerSelect', 'inputs': {'sampler_name': 'res_multistep'}},

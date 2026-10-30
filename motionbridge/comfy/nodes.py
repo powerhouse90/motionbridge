@@ -1,4 +1,4 @@
-"""MotionBridge nodes: Setup, Load Character, Video to Motion, Retarget, Export.
+"""MotionBridge nodes: Setup, Load Character, Video to Motion, Smooth, Animation Spacing, Retarget, Export.
 
 Motion and characters pass between nodes as small dicts of file paths; the heavy work runs in
 subprocesses (GEM in its own environment, Blender in the background) so ComfyUI's Python and
@@ -241,6 +241,42 @@ class SmoothMotion(io.ComfyNode):
         return io.NodeOutput({**motion, 'file': str(out)})
 
 
+class AnimationSpacing(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id='MotionBridgeAnimationSpacing', display_name='Animation Spacing', category='MotionBridge',
+            description='Give captured moves an animator\'s timing: each punch, kick or swing eases in, is fastest past '
+                        'the middle, eases out onto its extreme and settles. The fastest stretches can skip frames for '
+                        'impact. Poses and length stay the same; each limb is timed on its own.',
+            inputs=[
+                Motion.Input('motion'),
+                io.Float.Input('ease_in', default=3.0, min=1.0, max=6.0, step=0.1,
+                               tooltip='How slowly a move leaves its start. 1 = no ease.'),
+                io.Float.Input('ease_out', default=1.2, min=0.1, max=4.0, step=0.1,
+                               tooltip='How gently it arrives on its extreme. Under ~0.5 is a dead stop.'),
+                io.Float.Input('overshoot', default=0.25, min=0.0, max=1.0, step=0.05,
+                               tooltip='How far it carries past the extreme before settling back. 0 = none.'),
+                io.Float.Input('skip_frames', default=0.5, min=0.0, max=0.9, step=0.05,
+                               tooltip='Share of the fast frames cut, so the limb jumps there (0.5 = every other '
+                                       'one). 0 = off.'),
+                io.Float.Input('skip_above', default=5.0, min=0.5, max=20.0, step=0.5,
+                               tooltip='m/s: only where a hand or foot moves faster than this (relative to the body) '
+                                       'are frames skipped.'),
+            ],
+            outputs=[Motion.Output(display_name='motion')])
+
+    @classmethod
+    def execute(cls, motion, ease_in, ease_out, overshoot, skip_frames, skip_above):
+        from motionbridge.core import soma, spacing
+        src = Path(motion['file'])
+        out = src.with_name(f'{src.stem}_spacing{digest(ease_in, ease_out, overshoot, skip_frames, skip_above)[:8]}.npz')
+        if not out.exists():
+            spacing.respace(soma.load(motion['file']), ease_in=ease_in, snap=ease_out, overshoot=overshoot,
+                            skip=skip_frames, skip_above=skip_above)[0].save(out)
+        return io.NodeOutput({**motion, 'file': str(out)})
+
+
 class Retarget(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -336,4 +372,4 @@ class Export(io.ComfyNode):
         return io.NodeOutput(video_out, text, ui=ui_out)
 
 
-NODES = [Setup, LoadCharacter, VideoToMotion, SmoothMotion, Retarget, Export]
+NODES = [Setup, LoadCharacter, VideoToMotion, SmoothMotion, AnimationSpacing, Retarget, Export]

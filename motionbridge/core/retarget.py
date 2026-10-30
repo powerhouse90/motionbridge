@@ -191,6 +191,21 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
     rest[:, :3, :3] = [_orthonormal(r) for r in rest[:, :3, :3]]
     to_arm = obj_rot.T
     up, fwd, left = (to_arm @ np.array(v) for v in (rigmap.up, rigmap.forward, rigmap.left))
+    # A posed rest (an idle with contrapposto) can turn and tilt the pelvis against the shoulders: one rig's rest
+    # pelvis is 7.6 degrees turned and 5.8 tilted. Facing square to that pelvis walked her 8 degrees off her
+    # shoulders, one arm swinging forward and the other back. Face square to the shoulders instead, and take
+    # the rest's pelvis turn and tilt off the hips (below), so only the performer's pelvis motion remains.
+    roles_ = rigmap.roles
+    pelvis_fix = np.eye(3)
+    if SQUARE_TO_SHOULDERS and all(s + k in roles_ for s in ('Left', 'Right') for k in ('Arm', 'Leg')):
+        head_of = lambda k: rest[index[roles_[k]], :3, 3]
+        across = head_of('LeftArm') - head_of('RightArm')
+        across -= up * across.dot(up)
+        if np.linalg.norm(across) > 1e-6:
+            left = across / np.linalg.norm(across)
+            fwd = np.cross(left, up)
+            hip_line = head_of('LeftLeg') - head_of('RightLeg')
+            pelvis_fix = _swing(hip_line, left)
 
     # SOMA -> rig frame. Facing comes from the rest pose (toes point forward).
     r = motion.rest[:, :3, 3]
@@ -222,6 +237,8 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
         if bone in upper:
             seg = chest_turn @ seg
         a = _swing(bone_dir, seg) if align and np.linalg.norm(bone_dir) > 1e-6 else np.eye(3)
+        if bone == roles_['Hips']:
+            a = pelvis_fix @ a
         target_rot[b] = np.einsum('tab,bc->tac', rotations[:, j(sj)], a @ rest[b, :3, :3])
     if head == 'face':
         # SOMA's rest pose looks ~9 degrees up, so copying its change from rest bowed every rig's
@@ -305,14 +322,21 @@ def retarget(motion, dump, rigmap, face_start=True, feet_ik=True, head='face', m
 
 BLEND = 5        # frames to ease into and out of a plant
 RELATIVE_LIMB = {'Shoulder', 'Foot', 'ToeBase'}
-USE_HIP_DROP, USE_PELVIS_ROLL = True, True  # switches kept for diagnosis
+USE_HIP_DROP, USE_PELVIS_ROLL = False, True  # hip drop off: lowering the hips for a foot that can't reach bent
+# the other planted knee (up to 23 degrees past the performer's in a walk); a foot short of its pin peels instead
 USE_CHEST_TURN = True
+SQUARE_TO_SHOULDERS = True  # facing square to the rest shoulders; the rest pelvis's own turn and tilt taken off
 ROOT_FULL_PLANTS_ONLY = False
+ROOT_STILL_FEET = True  # only still planted feet steer the root (see _plant_feet)
+STILL_REST, STILL_MOVE = 0.005, 0.02  # leg lengths per frame (~0.1 and ~0.4 m/s at 24 fps): full say / none
+ROOT_HEIGHT_HIGHEST = True  # root height from the planted foot that needs it highest (see _plant_feet)
+STRAIGHT_KNEE = 25.0        # degrees of knee bend: below it a stance leg counts as straight (the highest-foot rule)
 ROOT_SMOOTH = 2         # frames; halves body wobble at foot hand-offs. Was 0 when it caused 15-degree knee
                         # snaps, before KEEP_LEG_LENGTH; re-tested with it: no new snaps
 KEEP_LEG_LENGTH = True  # stance legs keep their transferred length (see the IK below)
 MAX_ROLL = np.radians(12)  # pelvis roll limit for planting both feet
 EASE = True
+KNEE_PRIOR = 0.03  # of leg length: a knee bent more than ~3 cm off the hip-ankle line keeps its own direction
 REACH = 0.9999   # essentially full length; 0.995 forced ~11 degrees of knee bend on straight legs
 
 
@@ -425,6 +449,12 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         for side, (goal, mask) in goals.items():
             l, s_, f, *_ = legs[side]
             w = legs_weight[side]
+            if ROOT_STILL_FEET:
+                # A planted foot that the performer's leg is already moving (pushing off, or the read sliding it)
+                # stops steering the body: holding the body to its pin dragged the hips back through each stance
+                # and let them go at the next step, a surge every step. The leg alone holds such a foot, or it peels.
+                step_ = np.linalg.norm(np.gradient(flat_(pose_[:, f, :3, 3]), axis=0), axis=1) / (legs[side][3] + legs[side][4])
+                w = w * np.clip((STILL_MOVE - step_) / (STILL_MOVE - STILL_REST), 0, 1)
             if ROOT_FULL_PLANTS_ONLY:  # an easing (swinging) foot does not drag the body
                 w = (w >= 0.999).astype(float)
                 err = target_full[side] - pose_[:, f, :3, 3]
@@ -436,6 +466,37 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         if known.any():
             shift = np.zeros((T, 3))
             shift[known] = num[known] / den[known, None]
+            if ROOT_HEIGHT_HIGHEST:
+                # Height: the highest any planted foot asks for, not their average. Averaged, the two feet of a
+                # double support split their disagreement: one straight leg is pushed into the floor (the floor
+                # guard bends its knee) and the other can't reach (the hips drop and bend both). From the
+                # highest, no knee bends past the performer's; the foot short of the floor peels onto its toe,
+                # as a trailing foot does. Only while the leg asking highest is near straight: with bent legs
+                # (crouch, jump landing) nothing buckles, and lifting to the highest left the other foot
+                # hanging up to 19 cm above its plant.
+                high = np.full(T, -np.inf)
+                straight = np.zeros(T, bool)
+                for side, (goal, mask) in goals.items():
+                    l, s_, f = legs[side][:3]
+                    w = legs_weight[side]
+                    dz = (target_full[side] - pose_[:, f, :3, 3]) @ up
+                    a, b = pose_[:, l, :3, 3] - pose_[:, s_, :3, 3], pose_[:, f, :3, 3] - pose_[:, s_, :3, 3]
+                    bend = 180 - np.degrees(np.arccos(np.clip((a * b).sum(1) / np.linalg.norm(a, axis=1) / np.linalg.norm(b, axis=1), -1, 1)))
+                    top = (w >= 0.999) & (dz > high)
+                    straight = np.where(top, bend < STRAIGHT_KNEE, straight)
+                    high = np.where(top, dz, high)
+                # ...and never higher than every planted leg can still reach its spot from: a straight leg
+                # can't extend, so a lift past its reach left a standing foot hanging 18 cm up.
+                cap = np.full(T, np.inf)
+                for side, (goal, mask) in goals.items():
+                    l, s_, f, a_, b_ = legs[side]
+                    v = target_full[side] - (pose_[:, l, :3, 3] + shift)
+                    h = np.linalg.norm(v - np.outer(v @ up, up), axis=1)
+                    lift = np.sqrt(np.maximum((REACH * (a_ + b_)) ** 2 - h ** 2, 0)) + v @ up  # room to rise
+                    cap = np.where(legs_weight[side] >= 0.999, np.minimum(cap, shift @ up + lift), cap)
+                high = np.minimum(high, cap)
+                full = np.isfinite(high) & straight & (high > shift @ up)
+                shift[full] += np.outer(high[full] - shift[full] @ up, up)
             for axis in range(3):  # carry the correction smoothly through airborne frames
                 shift[~known, axis] = np.interp(np.flatnonzero(~known), np.flatnonzero(known), shift[known, axis])
             k = 2 * ROOT_SMOOTH + 1
@@ -489,7 +550,15 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
         reach = REACH * (a + b)
         need = np.where(h < reach, -np.sqrt(np.maximum(reach ** 2 - h ** 2, 0)) - z, 0)
         drop = np.maximum(drop, np.where(mask, need, 0))
-    if USE_HIP_DROP and drop.max() > 0:
+    if not USE_HIP_DROP:
+        # Off for straight stance legs only: lowering the hips there bent the other planted knee (a walk). With
+        # every planted leg already bent (a landing, a crouch) the drop costs nothing and keeps feet down.
+        for side in goals:
+            l, s, f = legs[side][:3]
+            u, w_ = pose[:, l, :3, 3] - pose[:, s, :3, 3], pose[:, f, :3, 3] - pose[:, s, :3, 3]
+            bend = 180 - np.degrees(np.arccos(np.clip((u * w_).sum(1) / np.linalg.norm(u, axis=1) / np.linalg.norm(w_, axis=1), -1, 1)))
+            drop = np.where((legs_weight[side] > 0) & (bend < STRAIGHT_KNEE), 0, drop)
+    if drop.max() > 0:
         k = 2 * BLEND + 1
         drop = np.array([drop[max(0, t - BLEND):t + BLEND + 1].max() for t in range(T)])  # cover neighbours
         drop = np.convolve(np.pad(drop, BLEND, mode='edge'), np.ones(k) / k, mode='valid')
@@ -515,13 +584,23 @@ def _plant_feet(fk, target_rot, root, rest, parent, index, roles, locks, up, fwd
             # leg keeps its transferred length and is only re-aimed at the pin: the knee angle stays the
             # performer's and the foot lands within a few mm of its pin.
             keep = np.linalg.norm(A - H, axis=1)
+            # A clearly bent leg (landing, crouching) is not near full extension: it reaches its pin, or a foot
+            # that GEM lands lower than the rig's legs put it hangs above the floor (up to 19 cm on a jump).
+            u, w_ = H - K, A - K
+            bend = 180 - np.degrees(np.arccos(np.clip((u * w_).sum(1) / np.linalg.norm(u, axis=1) / np.linalg.norm(w_, axis=1), -1, 1)))
+            keep = np.where(bend < STRAIGHT_KNEE, keep, np.linalg.norm(v, axis=1))
             # ...except where that would put the planted ankle below the floor: bend just enough.
             floor_h = rest[f, :3, 3] @ up
             dz = (v / np.linalg.norm(v, axis=1, keepdims=True)) @ up
             limit = np.where(dz < -1e-6, (floor_h - H @ up) / np.minimum(dz, -1e-6), np.inf)
             dist = np.clip(np.minimum(keep, limit), abs(a - b) + 1e-4, REACH * (a + b))
         n = v / np.linalg.norm(v, axis=1, keepdims=True)
-        bend = (K - H) - np.einsum('ti,ti->t', K - H, n)[:, None] * n
+        # Knee direction: the performer's, leaning toward the body's forward by KNEE_PRIOR of the leg's length.
+        # On a near-straight leg the performer's sideways knee offset is noise, and the floor guard above can
+        # still bend it, so without the lean a straight leg's knee flicks sideways or back for a frame.
+        ahead = (target_rot[hips] @ np.linalg.inv(rest[hips, :3, :3]) @ fwd)[frames] if hips in target_rot             else np.tile(fwd, (len(frames), 1))
+        bend = (K - H) + KNEE_PRIOR * (a + b) * (ahead - np.outer(ahead @ up, up))
+        bend = bend - np.einsum('ti,ti->t', bend, n)[:, None] * n
         weak = np.linalg.norm(bend, axis=1) < 1e-4 * (a + b)
         bend[weak] = fwd - np.outer(n[weak] @ fwd, np.ones(3)) * n[weak]  # straight leg: knees forward
         bend /= np.linalg.norm(bend, axis=1, keepdims=True)

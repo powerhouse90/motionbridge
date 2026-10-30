@@ -7,6 +7,7 @@ python -m tests.h3_takes reimport  rebuild golden H3 motions from existing extra
 """
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -39,9 +40,18 @@ def api(config, path, data=None):
         return json.loads(body) if body.strip() else {}  # /free answers with an empty body
 
 
+SPEC = Path(os.environ.get('H3_TAKES', ROOT / 'golden' / 'h3_takes.toml'))  # another takes file (H3_TAKES=...)
+
+
 def takes():
-    spec = tomllib.loads((ROOT / 'golden' / 'h3_takes.toml').read_text(encoding='utf-8'))
+    spec = tomllib.loads(SPEC.read_text(encoding='utf-8'))
     return spec['defaults'], spec['takes']
+
+
+def motions_dir():
+    """Where imported motions go: the takes file's own import_dir, else golden/motions."""
+    d = takes()[0].get('import_dir')
+    return Path(d) if d else ROOT / 'golden' / 'motions'
 
 
 def folder(config, take):
@@ -60,12 +70,12 @@ def queue(config, only=None):
         out.mkdir(parents=True, exist_ok=True)
         intro = defaults['three_view_intro'] if take['layout'].endswith('hands') else defaults['two_view_intro']
         prompt = json.loads(json.dumps(template))
-        prompt['1']['inputs'].update(asset_file=defaults['asset_file'], layout=take['layout'])
+        prompt['1']['inputs'].update(asset_file=defaults.get('asset_file') or config['paths']['performer'], layout=take['layout'])
         prompt['10']['inputs'].update(prompt=' '.join([intro, take['action'], defaults['outro']]),
-                                      length=defaults['frames'])
+                                      length=take.get('frames', defaults['frames']))
         prompt['4']['inputs']['unet_name'] = defaults['unet_name']
         prompt['11']['inputs']['noise_seed'] = defaults['seed']
-        prompt['19']['inputs']['filename_prefix'] = f"video/MotionBridge_golden_{take['name']}"
+        prompt['19']['inputs']['filename_prefix'] = f"video/MotionBridge_{defaults.get('prefix', 'golden')}_{take['name']}"
         (out / 'prompt_api.json').write_text(json.dumps(prompt, indent=1))
         receipt = api(config, '/prompt', {'prompt': prompt, 'client_id': 'motionbridge-golden'})
         if receipt.get('node_errors'):
@@ -144,8 +154,9 @@ def import_take(config, take):
         keypoints = torch.load(extraction / 'capture' / 'preprocess' / 'vitpose.pt').numpy()
         motion, report = head_pose.refine(motion, extraction / 'motion_export.npz', keypoints)
         (folder(config, take) / 'head_pose.json').write_text(json.dumps(report, indent=1))
-    motion.save(ROOT / 'golden' / 'motions' / f"h3_{take['name']}.npz")
-    print(f"{take['name']}: imported golden/motions/h3_{take['name']}.npz")
+    motions_dir().mkdir(parents=True, exist_ok=True)
+    motion.save(motions_dir() / f"h3_{take['name']}.npz")
+    print(f"{take['name']}: imported {motions_dir() / ('h3_' + take['name'] + '.npz')}")
 
 
 def reimport(config):
@@ -160,7 +171,7 @@ def status(config):
     _, all_takes = takes()
     for take in all_takes:
         out = folder(config, take)
-        stage = ('imported' if (ROOT / 'golden' / 'motions' / f"h3_{take['name']}.npz").exists() else
+        stage = ('imported' if (motions_dir() / f"h3_{take['name']}.npz").exists() else
                  'video collected' if (out / 'raw_h3.mp4').exists() else
                  'queued' if (out / 'queue_receipt.json').exists() else 'not queued')
         print(f"{take['name']}: {stage}")

@@ -70,7 +70,7 @@ def main():
     bpy.context.view_layer.update()
     floor_z = min(q.z for q in mesh_points(meshes, 1))
     rig.data.pose_position = 'POSE'
-    add_floor(floor_z)
+    floor = add_floor(floor_z)
 
     scene.render.engine = 'BLENDER_EEVEE'
     scene.eevee.taa_render_samples = 8
@@ -142,19 +142,34 @@ def main():
             scene.render.filepath = str(target) + '/'
             bpy.ops.render.render(animation=True)
         else:
-            # Tracking camera every frame, level, following the hips: at the right side (profile) or in front.
-            distance = radius / math.sin(fov / 2) * 1.05
+            # Tracking camera, level, following the hips: at the right side (profile) or in front. Its direction is
+            # the clip's average squaring and its path the hips' smoothed over about a second, so the body's own hip
+            # turn and sway play against a steady floor instead of swinging the camera with them.
+            distance = body / math.sin(fov / 2) * 1.05  # it tracks the hips, so frame the body, not the whole path
+            pair = a.square_pair or a.hips_pair
+            sides, pelvis = [], []
             for f in range(start, end + 1):
                 scene.frame_set(f)
-                l_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[0]].head
-                r_thigh = rig.matrix_world @ rig.pose.bones[a.hips_pair[1]].head
-                pair = a.square_pair or a.hips_pair
-                side = (rig.matrix_world @ rig.pose.bones[pair[1]].head) - (rig.matrix_world @ rig.pose.bones[pair[0]].head)
-                side.z = 0
-                side.normalize()
-                pelvis = (l_thigh + r_thigh) / 2
-                aim = Vector((pelvis.x, pelvis.y, centre.z))
-                look = side if a.view == 'profile' else Vector((0, 0, 1)).cross(side)  # front: up x right = forward
+                head = lambda b: rig.matrix_world @ rig.pose.bones[b].head
+                s = head(pair[1]) - head(pair[0])
+                s.z = 0
+                sides.append(s.normalized())
+                pelvis.append((head(a.hips_pair[0]) + head(a.hips_pair[1])) / 2)
+            side = sum(sides, Vector()).normalized()
+            path = pelvis[-1] - pelvis[0]
+            path.z = 0
+            if path.length > 0.5:  # travelling: square the camera and the checker lines to the path, so a straight
+                # walk runs straight along the squares instead of across them at the body's few-degree crab
+                path.normalize()
+                side = Vector((0, 0, 1)).cross(path) if side.dot(Vector((0, 0, 1)).cross(path)) > 0 else path.cross(Vector((0, 0, 1)))
+                floor.rotation_euler.z = math.atan2(path.y, path.x)
+            look = side if a.view == 'profile' else Vector((0, 0, 1)).cross(side)  # front: up x right = forward
+            half = max(int(scene.render.fps / scene.render.fps_base / 2), 1)
+            for i, f in enumerate(range(start, end + 1)):
+                scene.frame_set(f)
+                near = pelvis[max(0, i - half):i + half + 1]
+                p = sum(near, Vector()) / len(near)
+                aim = Vector((p.x, p.y, centre.z))
                 cam.location = aim + look * distance
                 cam.rotation_euler = (-look).to_track_quat('-Z', 'Y').to_euler()
                 scene.render.filepath = str(target / f'{f:04d}.png')

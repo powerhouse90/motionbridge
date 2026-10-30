@@ -23,11 +23,18 @@ Setup -> Load Character -> Render Starting Views -> H3 -> Video to Motion (GEM) 
    `video` instead of H3's frames).
 5. **Smooth Motion**: adaptive. Slow joints are smoothed hard and fast ones barely, so strikes keep their snap,
    with no lag. 0.5 suits most clips.
-6. **Retarget Motion** onto your character, keeping its bone lengths:
+6. **Animation Spacing** gives each move an animator's timing, keeping its poses and length: a slow ease in,
+   fastest past the middle, a shorter ease out onto the extreme, a small settle. Each limb is timed on its own.
+   - `ease_in` / `ease_out`: how slowly a move leaves its start and arrives on its extreme (`ease_out` under ~0.5 is
+     a dead stop, which usually reads as a mistake);
+   - `overshoot`: how far it carries past the extreme before settling back;
+   - `skip_frames` / `skip_above`: where a hand or foot moves faster than `skip_above` m/s, that share of frames is
+     cut so the limb jumps, for impact. Slower moves are only respaced. `skip_frames` 0 turns it off.
+7. **Retarget Motion** onto your character, keeping its bone lengths:
    - `foot_ik` pins planted feet so they don't slide or sink;
    - `head` `face` aims the face where the performer's face points, `carriage` keeps your character's built-in
      head pose and adds the change.
-7. **Export Animated Character**: BLEND + FBX (+ GLB), checked bone by bone against the retarget. Your source
+8. **Export Animated Character**: BLEND + FBX (+ GLB), checked bone by bone against the retarget. Your source
    file is never modified. `preview` renders the textured character (`follow`, `front`, `profile`, `whole path`).
 
 ## Tips

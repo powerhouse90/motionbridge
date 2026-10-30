@@ -3,7 +3,7 @@
 # motion is what matters, so one performer is enough. Retargets go to every rig.
 
 [defaults]
-asset_file = "C:/Users/Razgriz/Documents/Github/lil horror/midnight_rinse_R2/characters/punk_couple/female_v2/torso_balance/relaxed_idle_retarget.blend"
+# asset_file: the performer's .blend, from config.toml [paths] performer (a character you can't redistribute stays local)
 unet_name = "h3ErosMax_beta5_fp8.safetensors"   # test clips only; publish with official H3 weights
 frames = 73
 seed = 21092631
@@ -58,3 +58,10 @@ name = "squat_kicks"
 layout = "front + 3/4"
 action = "Cossack squat dance (prisyadka): she drops into a deep crouch with her arms held out to the sides, and from the crouch kicks her legs out straight forward one after the other, right then left, in a quick bouncing rhythm, four kicks while staying low the whole time, then rises back to standing. She stays in place facing the front camera, her whole body inside each panel."
 why = "Expressive performance: deep crouch held while legs kick out, fast alternating single-leg support"
+
+[[takes]]
+name = "walk_cycle"
+layout = "front + 3/4"
+frames = 97
+action = "Steady walk cycle: she starts walking immediately and keeps a constant relaxed pace toward the front camera for the whole clip, never slowing or stopping, about six even steps starting with her anatomical right foot. Upright posture, head level, eyes ahead, feet landing hip-width apart (not on one line), clear heel strikes, straight stance legs, toe-offs, and relaxed alternating arm swing opposite to the legs. Her facing direction stays constant and her whole body stays inside each panel."
+why = "Source for a looping walk cycle: several strides at a constant speed, no start-up or stop"

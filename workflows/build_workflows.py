@@ -199,7 +199,8 @@ Type an action, get it on **your own rigged character**.
 3. **Render Starting Views** renders matching front + three-quarter views for H3.
 4. **H3** animates them. Edit the prompt: keep the two-panel wording, change the action.
 5. **Video to Motion (GEM)** reads 77-joint 3D motion from the left (front) panel.
-6. **Smooth**, **Retarget** onto your rig (feet pinned), **Export** BLEND + FBX + GLB and a preview.
+6. **Smooth**, **Animation Spacing** (ease in, fast middle, ease out, settle; frames skipped on the fastest stretches),
+   **Retarget** onto your rig (feet pinned), **Export** BLEND + FBX + GLB and a preview.
 
 8 GB GPU: Video to Motion unloads H3 before GEM runs.""")
     g.group('1. Setup and character', (0, -100, 1180, 640), 'setup')
@@ -215,7 +216,9 @@ Type an action, get it on **your own rigged character**.
     motion = g.node('MotionBridgeVideoToMotion', (3770, -40), size=(380, 170), images=(frames, 0), fps=24.0,
                     panel='left half (front view of 2)', camera='rendered reference (orthographic)')
     smooth = g.node('MotionBridgeSmoothMotion', (3770, 160), motion=(motion, 0), strength=0.5)
-    retarget = g.node('MotionBridgeRetarget', (4180, -40), size=(360, 200), character=(char, 0), motion=(smooth, 0),
+    spaced = g.node('MotionBridgeAnimationSpacing', (3770, 280), size=(380, 230), motion=(smooth, 0), ease_in=3.0,
+                    ease_out=1.2, overshoot=0.25, skip_frames=0.5, skip_above=5.0)
+    retarget = g.node('MotionBridgeRetarget', (4180, -40), size=(360, 200), character=(char, 0), motion=(spaced, 0),
                       action_name='motion', foot_ik=True, head='face')
     g.node('MotionBridgeExport', (4570, -40), size=(380, 520), animation=(retarget, 0), filename_prefix='motionbridge/character',
            glb=True, preview='follow')
