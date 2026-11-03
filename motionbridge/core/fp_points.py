@@ -187,7 +187,8 @@ OUTLINE_CUTOFF = 1.5      # Hz: the correction is low-passed between its frames
 
 def silhouette(tris, M, cam, shape, scale=OUTLINE_SCALE):
     """Boolean mask (shape) of the prop's triangles posed by M (relative to the scene) seen through cam;
-    triangles at or behind the camera are left out."""
+    triangles at or behind the camera are left out. Each triangle is filled on its own: one fillPoly call over
+    all of them fills even-odd, so where triangles overlap (any closed mesh seen from outside) they cancel."""
     from motionbridge.core.hand_fit import project
     C = np.array(cam['world'])
     fwd = -C[:3, 2] / np.linalg.norm(C[:3, 2])
@@ -195,7 +196,8 @@ def silhouette(tris, M, cam, shape, scale=OUTLINE_SCALE):
     front = ((w - C[:3, 3]) @ fwd > 0.02).all(1)
     q = (project(w[front].reshape(-1, 3), cam) / scale).reshape(-1, 3, 2)
     im = np.zeros(shape, np.uint8)
-    cv2.fillPoly(im, list(np.round(q).astype(np.int32)), 1)
+    for tri in np.round(q).astype(np.int32):
+        cv2.fillConvexPoly(im, tri, 1)
     return im > 0
 
 
