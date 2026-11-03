@@ -5,7 +5,8 @@ blender -b --python-exit-code 1 --python fp_apply.py -- --scene scene.blend --tr
 
 track.npz: names (bones), basis (T, B, 4, 4) per frame, items (K, T, 4, 4) each item's motion, item_roots (K);
 optionally arm_names (A): arm bones whose basis in the track already places them (core.fp_twist: the forearm
-rolls with the hand).
+rolls with the hand); optionally part_names (P) and parts (P, T, 4, 4): moving parts of a prop (a magazine), each
+part object unparented and keyed with its own motion, relative to the scene placement as items are.
 The BLEND keeps the arm's IK (the hand is keyed, the arm follows; still editable) unless the track names arm
 bones: then the IK over those arms is muted, since IK would put the forearm back without its roll. FBX and GLB get every bone baked from what Blender shows, since those formats carry no IK. The item is
 keyed on MB_<item> empties. --preview renders every frame from the scene camera.
@@ -64,6 +65,28 @@ def main():
             o.rotation_mode = 'QUATERNION'
         cam.animation_data_create()
         cam.animation_data.action = bpy.data.actions.new(f'{a.action}_camera')
+    # moving parts (a magazine out of its well, carried by a hand): each part object leaves its parent and is keyed
+    # with its own motion, like an item's (relative to the scene placement)
+    parts = []
+    if 'part_names' in d.files:
+        if len(d['part_names']) != len(d['parts']) or d['parts'].shape[1] != T:
+            raise ValueError(f"parts {d['parts'].shape} don't match {len(d['part_names'])} part names and {T} frames")
+        for name, M in zip(d['part_names'], d['parts']):
+            o = bpy.data.objects.get(str(name))
+            if o is None:  # a hand would reach for a part that never leaves its place
+                raise ValueError(f'part {str(name)!r} not in {a.scene}')
+            if o in roots:
+                raise ValueError(f'part {o.name!r} is also an item root')
+            if o.constraints:  # would override the keys
+                print(f'FPAPPLY warning: part {o.name!r} has constraints ({", ".join(c.type for c in o.constraints)}); they override its keys')
+            w0 = o.matrix_world.copy()
+            o.parent = None
+            o.matrix_parent_inverse.identity()
+            o.matrix_world = w0
+            o.rotation_mode = 'QUATERNION'
+            o.animation_data_create()
+            o.animation_data.action = bpy.data.actions.new(f'{a.action}_{o.name}')
+            parts.append((o, np.array(w0), M))
     for t in range(T):
         if view is not None:
             V = Matrix(view[t].tolist())
@@ -83,11 +106,15 @@ def main():
             root.matrix_world = Matrix(((view[t] @ M[t]) if view is not None else M[t]).tolist())
             root.keyframe_insert('location', frame=t + 1)
             root.keyframe_insert('rotation_quaternion', frame=t + 1)
+        for o, w0, M in parts:
+            o.matrix_world = Matrix((((view[t] @ M[t]) if view is not None else M[t]) @ w0).tolist())
+            o.keyframe_insert('location', frame=t + 1)
+            o.keyframe_insert('rotation_quaternion', frame=t + 1)
     scene.frame_set(1)
     bpy.ops.wm.save_as_mainfile(filepath=str(Path(a.out).resolve()), copy=True)
 
     if a.preview:
-        out = Path(a.preview)
+        out = Path(a.preview).resolve()
         out.mkdir(parents=True, exist_ok=True)
         for t in range(T):
             scene.frame_set(t + 1)
@@ -105,11 +132,14 @@ def main():
         bpy.ops.nla.bake(frame_start=1, frame_end=T, only_selected=False, visual_keying=True,
                          clear_constraints=True, use_current_action=True, bake_types={'POSE'})
         bpy.ops.object.mode_set(mode='OBJECT')
+        # one clip: the arms, the prop and its parts each have their own action, and both exporters otherwise write
+        # every action as its own clip (the rifle in one, the arms in another, plus any old action in the file)
         if a.fbx:
             bpy.ops.export_scene.fbx(filepath=str(Path(a.fbx).resolve()), use_selection=False, bake_anim=True,
-                                     add_leaf_bones=False, bake_anim_use_nla_strips=False)
+                                     add_leaf_bones=False, bake_anim_use_nla_strips=False, bake_anim_use_all_actions=False)
         if a.glb:
-            bpy.ops.export_scene.gltf(filepath=str(Path(a.glb).resolve()), export_format='GLB', export_animations=True)
+            bpy.ops.export_scene.gltf(filepath=str(Path(a.glb).resolve()), export_format='GLB', export_animations=True,
+                                      export_animation_mode='ACTIVE_ACTIONS')
     print('FPAPPLY ok', T, 'frames,', len(moving), 'keyed bones' + (f' (IK muted over {len(arms)} rolled arm bones)' if arms else ''))
 
 
