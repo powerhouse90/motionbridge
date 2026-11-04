@@ -534,6 +534,18 @@ class TrackFPHands(io.ComfyNode):
             params_s[h] = fp_track.hold_prop(rigs[h], params_s[h], smoothed, grip, fingers)
         params_s = fp_track.settle_contacts(rigs, prop, smoothed, params_s, None, cam, log=log.append)
         basis, smoothed, eased = fp_track.ease_pops(rigs, fp_track.combined_basis(rigs, params_s), prop, smoothed)
+        if prop is not None and not sock:
+            # taken during the take: from then on the prop rides the finished hand (the hand leads; the prop's
+            # outline is least sure exactly while it is held and moved). The hand stays as tracked, its fingers keep
+            # the grip; the prop is put back into the hand that was exported
+            pick = fp_track.pickup(rigs, prop, params_s, smoothed)
+            if pick:
+                h, t0, grip, hold = pick
+                smoothed = fp_track.carry_from(fp_track.hand_frames(rigs[h], basis), smoothed, t0, grip)
+                basis, followed = fp_track.hold_fingers(rigs[h], basis, t0, hold)
+                log.append(f'main prop taken by the {rigs[h].hand.side.lower()} hand at frame {t0} (its grip from frames '
+                           f'{hold[0]}-{hold[1]}): it follows that hand from then on, the fingers keep the grip'
+                           + (f' (the read followed where it changed for good: {", ".join(f"{a}-{b}" for a, b in followed)})' if followed else ''))
         track = folder / f'track_{"_".join(r.hand.side for r in rigs)}_s{smoothing:g}.npz'
         np.savez(track, names=np.array(rigs[0].names), basis=basis,
                  items=np.array([smoothed]) if prop is not None else np.zeros((0, T, 4, 4)),
