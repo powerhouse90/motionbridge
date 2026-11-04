@@ -7,7 +7,9 @@ video starts from a render of this scene. From there:
   1. each hand is tracked from the previous frame, matching the extracted hand's bone directions (each
      rig keeps its own proportions) and screen points, without passing through the prop
   2. the main prop: while the hand that holds it in the start frame holds it, that hand decides where it
-     is (its start-frame grip is the socket); a prop nobody holds is tracked from its outline
+     is (its start-frame grip is the socket); a prop nobody holds is tracked from its outline until a hand
+     takes it (pickup: on it, still in it for a few frames, then moved by it), then that hand carries it to
+     the end of the take (no release yet)
   3. hands and prop are smoothed (One Euro, zero-phase), the holding hand is put back exactly on the prop,
      fingers are kept out of the prop and the other hand, and remaining pops are eased
 Everything else in the scene (loose parts, spare magazines) is left as the user placed it.
@@ -607,6 +609,133 @@ def _place_hand(rig, x, target):
     y = x.copy()
     y[:k] = least_squares(res, x[:k]).x
     return y
+
+
+PICKUP_STEADY = 8      # frames the prop must sit still in the hand to count as taken (all but one of them)
+PICKUP_TURN = 6.0      # deg: the prop's turn in the hand's frame within this of the window's mean is sitting still
+PICKUP_SLIDE = 0.015   # m: and its middle within this of the window's mean (the reads are unsmoothed and spike)
+PICKUP_NEAR = 0.03     # m: hand surface points (fingers, palm) this close to the prop count as on it (the tracked hand
+                       # and the outline-tracked prop can sit a centimetre or two apart)
+PICKUP_MOVED = 0.05    # m: and the hand must then move the prop: the hand at least this far, the prop's outline half as
+PICKUP_LIFT = 24       # far the same way, within this many frames of the settled hold (a hand resting on a keyboard
+                       # or a mug, or brushing past a prop, doesn't take it)
+
+
+def pickup(rigs, prop, params, motion):
+    """(hand, frame, grip, (from, to)): a prop no hand holds in the start frame but one takes hold of later. Taken
+    at the first frame a hand is on it (SOCKET_TOUCH of its surface points within PICKUP_NEAR, at the window's
+    first frame) and it then sits still in that hand: over PICKUP_STEADY frames, all but one within PICKUP_TURN /
+    PICKUP_SLIDE of their mean pose in the hand's frame; and the hand then moves it (PICKUP_MOVED within
+    PICKUP_LIFT frames of the hold). grip is the hand's frame in the prop's frame, averaged over the last steady
+    window of that run (from..to: the settled hold, after the fingers have closed; the prop's middle averaged, not
+    its origin, which may be far away). From then on the hand decides where the prop is, as for one held from the
+    start: its outline is least sure exactly while it is held and moved. None if no hand takes it."""
+    best = None
+    for h, (rig, P) in enumerate(zip(rigs, params)):
+        T = len(P)
+        H = np.array([rig.hand_frame(x) for x in P])
+        rel = np.array([np.linalg.inv(H[t]) @ motion[t] for t in range(T)])             # the prop in the hand's frame
+        mid = rel[:, :3, :3] @ prop.centre + rel[:, :3, 3]
+        where = motion[:, :3, :3] @ prop.centre + motion[:, :3, 3]                      # its middle in the world
+
+        def steady(t):
+            """The steady frames of the window from t, or None (too few, or the hand not on the prop)."""
+            if _near(rig, prop, P[t], motion[t]) < SOCKET_TOUCH:
+                return None
+            w = np.arange(t, t + PICKUP_STEADY)
+            turns = Rotation.from_matrix(rel[w, :3, :3])
+            ok = ((turns * turns.mean().inv()).magnitude() < np.radians(PICKUP_TURN)) & \
+                 (np.linalg.norm(mid[w] - mid[w].mean(0), axis=1) < PICKUP_SLIDE)
+            return w[ok] if ok.sum() >= PICKUP_STEADY - 1 else None
+
+        def moved(t, end):
+            """The hand moved the prop between t and end: its hand PICKUP_MOVED away, the outline along with it."""
+            s = slice(t, min(end + PICKUP_LIFT, T))
+            dh, dp = H[s, :3, 3] - H[t, :3, 3], where[s] - where[t]
+            k = int(np.argmax(np.linalg.norm(dh, axis=1)))
+            a, b = np.linalg.norm(dh[k]), np.linalg.norm(dp[k])
+            return a >= PICKUP_MOVED and b >= PICKUP_MOVED / 2 and dh[k] @ dp[k] > 0.5 * a * b
+        for t in range(T - PICKUP_STEADY + 1):
+            if best is not None and t >= best[1]:
+                break
+            w = steady(t)
+            if w is None:
+                continue
+            u = t + 1                    # the run of steady windows from here: its last is the settled hold
+            while u <= T - PICKUP_STEADY and (v := steady(u)) is not None:
+                w, u = v, u + 1
+            if not moved(t, int(w[-1])):
+                continue
+            R = Rotation.from_matrix(rel[w, :3, :3]).mean().as_matrix()
+            G = np.eye(4)
+            G[:3, :3] = R
+            G[:3, 3] = mid[w].mean(0) - R @ prop.centre
+            best = (h, t, np.linalg.inv(G), (int(w[0]), int(w[-1])))
+            break
+    return best
+
+
+def hand_frames(rig, basis):
+    """The hand's frame (unscaled) per frame of an armature basis (T, B, 4, 4)."""
+    out = np.array([rig.sk.pose(b)[rig.sk.index[rig.hand.hand]] for b in basis])
+    out[:, :3, :3] /= np.linalg.norm(out[:, :3, :3], axis=1, keepdims=True)
+    return out
+
+
+def carry_from(hand, motion, start, grip):
+    """The prop's motion with the hand (its frames, (T, 4, 4), the exported hand) carrying it from frame start to the
+    end, eased in over the EASE frames from start (the hand is on the prop by then; before it the prop stays as
+    tracked, so it doesn't lift toward an approaching hand)."""
+    out = motion.copy()
+    carried = hand @ np.linalg.inv(grip)
+    for t in range(start, len(out)):
+        f = min((t - start + 1) / (EASE + 1), 1.0)
+        out[t] = _blend(motion[t], carried[t], f * f * (3 - 2 * f))
+    return out
+
+
+REGRIP_DEV = 30.0      # deg: a finger read this far from the grip (mean over its joints; the furthest finger) ...
+REGRIP_FRAMES = 12     # ... for this many frames in a row is a real change (opening, regripping): followed
+
+
+def hold_fingers(rig, basis, start, hold):
+    """While the hand carries the prop (from frame start), its fingers keep the grip: each finger joint leans
+    SOCKET_FINGERS of the way to its mean over the settled hold (frames hold[0]..hold[1]), as a hand held from the
+    start does. A hand keeps its grip while it swings, but the per-frame read of a fast, blurred hand doesn't; only
+    a read that stays REGRIP_DEV from the grip for REGRIP_FRAMES is followed. Finger joints only: the hand, and so
+    the carried prop, don't move. Returns (basis, frames where the read was followed)."""
+    basis = basis.copy()
+    T = len(basis)
+    idx = [rig.sk.index[n] for j in rig.hand.fingers.values() for n in j]
+    grip = [Rotation.from_matrix(basis[hold[0]:hold[1] + 1, i, :3, :3]).mean() for i in idx]
+    off_grip = np.array([np.degrees((Rotation.from_matrix(basis[:, i, :3, :3]) * g.inv()).magnitude()) for i, g in zip(idx, grip)])
+    k = 0
+    per_finger = []
+    for joints in rig.hand.fingers.values():                # per finger: one finger opening alone counts too
+        per_finger.append(off_grip[k:k + len(joints)].mean(0))
+        k += len(joints)
+    dev = np.max(per_finger, axis=0)
+    lock = np.zeros(T)
+    lock[start:] = SOCKET_FINGERS
+    off = dev > REGRIP_DEV
+    edges = np.flatnonzero(np.diff(np.r_[0, off.astype(int), 0]))
+    followed = []
+    for a, b in zip(edges[::2], edges[1::2]):
+        if b - a >= REGRIP_FRAMES and b > start:
+            lock[max(a, start):b] = 0
+            followed.append((max(int(a), start), int(b) - 1))
+    lock = uniform_filter1d(lock, EASE)                     # eased around followed stretches ...
+    f = np.clip((np.arange(T) - start + 1) / (EASE + 1), 0, 1)
+    lock *= f * f * (3 - 2 * f)                             # ... and in from start, with the prop (carry_from)
+    for t in range(start, T):
+        for i, g in zip(idx, grip):
+            r = Rotation.from_matrix(basis[t, i, :3, :3])
+            basis[t, i, :3, :3] = (r * Rotation.from_rotvec(lock[t] * (r.inv() * g).as_rotvec())).as_matrix()
+    return basis, followed
+
+
+def _near(rig, item, x, M):
+    return int((item.distance(_surface_points(rig.keypoints(x)), M) < PICKUP_NEAR).sum())
 
 
 def hold_prop(rig, params, prop_motion, grip, fingers):
